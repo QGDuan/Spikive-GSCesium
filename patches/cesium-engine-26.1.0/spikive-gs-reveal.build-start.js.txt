@@ -1,0 +1,2 @@
+  const spikivePreviousDrawCommand = primitive._drawCommand;
+  const spikivePreviousVertexArray = primitive._vertexArray;

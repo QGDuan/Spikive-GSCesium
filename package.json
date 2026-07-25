@@ -1,0 +1,39 @@
+{
+  "name": "spikive-gs-cesium",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "postinstall": "npm run patch:cesium",
+    "patch:cesium": "node scripts/patch-cesium-gs-reveal.mjs",
+    "check:cesium-patch": "node scripts/patch-cesium-gs-reveal.mjs --check",
+    "check:rendering-architecture": "node scripts/check-rendering-architecture.mjs",
+    "predev": "npm run patch:cesium && npm run build -w @spikive/shared",
+    "dev": "concurrently -k -n server,web -c blue,green \"npm run dev -w @spikive/server\" \"npm run dev -w @spikive/web\"",
+    "server": "npm run start -w @spikive/server",
+    "build": "npm run build -w @spikive/shared && npm run build -w @spikive/web && npm run build -w @spikive/server",
+    "test": "npm run test -w @spikive/shared && npm run test -w @spikive/server && npm run test -w @spikive/web",
+    "typecheck": "npm run build -w @spikive/shared && npm run typecheck --workspaces --if-present",
+    "verify": "npm run check:cesium-patch && npm run check:rendering-architecture && npm run typecheck && npm test && npm run build && npm audit --omit=dev",
+    "audit:data": "node scripts/audit-data.mjs",
+    "clean": "npm run clean --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "9.2.4",
+    "typescript": "5.9.2",
+    "vitest": "4.1.10"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "esbuild@0.25.12": true,
+    "fsevents@2.3.3": true,
+    "webgpu@0.4.0": true
+  }
+}

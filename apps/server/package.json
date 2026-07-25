@@ -1,0 +1,32 @@
+{
+  "name": "@spikive/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --exclude '../../packages/shared/dist/**' --exclude '../../node_modules/@cesium/**' --exclude '../../node_modules/cesium/**' src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run src",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@fastify/cors": "11.3.0",
+    "@fastify/static": "10.1.2",
+    "@playcanvas/splat-transform": "3.1.6",
+    "@spikive/shared": "0.1.0",
+    "@tus/file-store": "2.0.0",
+    "@tus/server": "2.4.2",
+    "3dgs-ply-3dtiles-converter": "0.5.14",
+    "cesium": "1.143.0",
+    "fastify": "5.10.0",
+    "zod": "4.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2",
+    "vitest": "4.1.10"
+  }
+}

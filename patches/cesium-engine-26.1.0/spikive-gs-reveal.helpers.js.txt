@@ -1,0 +1,276 @@
+// SPIKIVE_GS_REVEAL_PATCH_BEGIN v6
+// Luma-inspired projected-covariance growth for Cesium's Gaussian primitive.
+// This remains a shader-only presentation variant: tile traversal, streaming,
+// snapshot aggregation, sorting and collision behavior are unchanged.
+const SPIKIVE_GS_REVEAL_CULL_ANCHOR = `    if (dot(covVectors.xy, covVectors.xy) < 4.0 && dot(covVectors.zw, covVectors.zw) < 4.0) {
+        gl_Position = discardVec;
+        return;
+    }`;
+const SPIKIVE_GS_REVEAL_COLOR_ANCHOR =
+  "    v_splatColor = vec4(covariance.w & 0xffu, (covariance.w >> 8) & 0xffu, (covariance.w >> 16) & 0xffu, (covariance.w >> 24) & 0xffu) / 255.0;";
+
+const SPIKIVE_GS_REVEAL_VS = GaussianSplatVS.replace(
+  SPIKIVE_GS_REVEAL_CULL_ANCHOR,
+  `${SPIKIVE_GS_REVEAL_CULL_ANCHOR}
+
+    float spikiveDistanceToCenter = distance(splatPosition.xyz, u_spikiveRevealCenter);
+    float spikiveRevealFeather = max(u_spikiveRevealFeather, 0.0001);
+    float spikiveRevealAlpha = 1.0 - smoothstep(
+        u_spikiveRevealRadius,
+        u_spikiveRevealRadius + spikiveRevealFeather,
+        spikiveDistanceToCenter
+    );
+
+    float spikiveSolidFeather = max(u_spikiveSolidFeather, 0.0001);
+    float spikiveRadialSolid = 1.0 - smoothstep(
+        u_spikiveSolidRadius,
+        u_spikiveSolidRadius + spikiveSolidFeather,
+        spikiveDistanceToCenter
+    );
+    float spikiveScaleProgress = clamp(u_spikiveScaleProgress, 0.0, 1.0);
+    float spikiveSolid = spikiveRadialSolid * spikiveScaleProgress;
+    float spikiveSeedSize = max(u_spikiveSeedSizePixels, 0.5);
+    float spikiveMajorLength = length(covVectors.xy);
+    float spikiveMinorLength = length(covVectors.zw);
+    vec2 spikiveSeedMajor = (spikiveMajorLength > 0.0001
+        ? covVectors.xy / spikiveMajorLength
+        : vec2(1.0, 0.0)) * spikiveSeedSize;
+    vec2 spikiveSeedMinor = (spikiveMinorLength > 0.0001
+        ? covVectors.zw / spikiveMinorLength
+        : vec2(0.0, 1.0)) * spikiveSeedSize;
+    covVectors = vec4(
+        mix(spikiveSeedMajor, covVectors.xy, spikiveSolid),
+        mix(spikiveSeedMinor, covVectors.zw, spikiveSolid)
+    );`,
+).replace(
+  SPIKIVE_GS_REVEAL_COLOR_ANCHOR,
+  `${SPIKIVE_GS_REVEAL_COLOR_ANCHOR}
+    float spikiveBaseAlpha = clamp(u_spikiveSeedAlpha, 0.0, 1.0);
+    float spikiveTargetAlpha = max(
+        spikiveBaseAlpha,
+        clamp(u_spikiveGlobalAlpha, 0.0, 1.0)
+    );
+    // Alpha is deliberately coupled to the same scale/Solid progress that
+    // restores the projected covariance axes. Reveal contributes only an
+    // early visibility lead, so opacity does not become a second animation.
+    float spikiveScaleAlphaProgress = clamp(
+        mix(spikiveRevealAlpha, spikiveSolid, 0.70),
+        0.0,
+        1.0
+    );
+    float spikiveAdjustedAlpha = mix(
+        spikiveBaseAlpha,
+        spikiveTargetAlpha,
+        spikiveScaleAlphaProgress
+    );
+    v_splatColor.a *= spikiveAdjustedAlpha;`,
+);
+
+function isSpikiveGaussianRevealEnabled(tileset) {
+  return tileset.spikiveGaussianSplatReveal?.enabled === true;
+}
+
+function getSpikiveGaussianRevealState(tileset) {
+  return tileset.spikiveGaussianSplatReveal;
+}
+
+function getSpikiveFiniteNumber(state, key, fallback) {
+  const value = state?.[key];
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function getSpikiveRevealCenter(state) {
+  const center = state?.center;
+  return defined(center) &&
+    Number.isFinite(center.x) &&
+    Number.isFinite(center.y) &&
+    Number.isFinite(center.z)
+    ? center
+    : Cartesian3.ZERO;
+}
+
+function addSpikiveGaussianRevealShaderResources(
+  primitive,
+  shaderBuilder,
+  uniformMap,
+) {
+  shaderBuilder.addUniform(
+    "vec3",
+    "u_spikiveRevealCenter",
+    ShaderDestination.VERTEX,
+  );
+  shaderBuilder.addUniform(
+    "float",
+    "u_spikiveRevealRadius",
+    ShaderDestination.VERTEX,
+  );
+  shaderBuilder.addUniform(
+    "float",
+    "u_spikiveRevealFeather",
+    ShaderDestination.VERTEX,
+  );
+  shaderBuilder.addUniform(
+    "float",
+    "u_spikiveSolidRadius",
+    ShaderDestination.VERTEX,
+  );
+  shaderBuilder.addUniform(
+    "float",
+    "u_spikiveSolidFeather",
+    ShaderDestination.VERTEX,
+  );
+  shaderBuilder.addUniform(
+    "float",
+    "u_spikiveSeedSizePixels",
+    ShaderDestination.VERTEX,
+  );
+  shaderBuilder.addUniform(
+    "float",
+    "u_spikiveScaleProgress",
+    ShaderDestination.VERTEX,
+  );
+  shaderBuilder.addUniform(
+    "float",
+    "u_spikiveGlobalAlpha",
+    ShaderDestination.VERTEX,
+  );
+  shaderBuilder.addUniform(
+    "float",
+    "u_spikiveSeedAlpha",
+    ShaderDestination.VERTEX,
+  );
+
+  const tileset = primitive._tileset;
+  uniformMap.u_spikiveRevealCenter = function () {
+    return getSpikiveRevealCenter(getSpikiveGaussianRevealState(tileset));
+  };
+  uniformMap.u_spikiveRevealRadius = function () {
+    return getSpikiveFiniteNumber(
+      getSpikiveGaussianRevealState(tileset),
+      "revealRadius",
+      0.0,
+    );
+  };
+  uniformMap.u_spikiveRevealFeather = function () {
+    return getSpikiveFiniteNumber(
+      getSpikiveGaussianRevealState(tileset),
+      "revealFeather",
+      1.0,
+    );
+  };
+  uniformMap.u_spikiveSolidRadius = function () {
+    return getSpikiveFiniteNumber(
+      getSpikiveGaussianRevealState(tileset),
+      "solidRadius",
+      -1.0,
+    );
+  };
+  uniformMap.u_spikiveSolidFeather = function () {
+    return getSpikiveFiniteNumber(
+      getSpikiveGaussianRevealState(tileset),
+      "solidFeather",
+      1.0,
+    );
+  };
+  uniformMap.u_spikiveSeedSizePixels = function () {
+    return getSpikiveFiniteNumber(
+      getSpikiveGaussianRevealState(tileset),
+      "seedSizePixels",
+      1.0,
+    );
+  };
+  uniformMap.u_spikiveScaleProgress = function () {
+    return getSpikiveFiniteNumber(
+      getSpikiveGaussianRevealState(tileset),
+      "scaleProgress",
+      1.0,
+    );
+  };
+  uniformMap.u_spikiveGlobalAlpha = function () {
+    return getSpikiveFiniteNumber(
+      getSpikiveGaussianRevealState(tileset),
+      "globalAlpha",
+      1.0,
+    );
+  };
+  uniformMap.u_spikiveSeedAlpha = function () {
+    return getSpikiveFiniteNumber(
+      getSpikiveGaussianRevealState(tileset),
+      "seedAlpha",
+      0.8,
+    );
+  };
+}
+
+function retireSpikiveGaussianDrawResources(
+  primitive,
+  frameNumber,
+  drawCommand,
+  vertexArray,
+) {
+  const shaderProgram = drawCommand?.shaderProgram;
+  if (!defined(shaderProgram) && !defined(vertexArray)) {
+    return;
+  }
+
+  primitive._spikiveRetiredDrawResources.push({
+    shaderProgram: shaderProgram,
+    vertexArray: vertexArray,
+    frameNumber: frameNumber,
+  });
+}
+
+function releaseSpikiveGaussianDrawResources(primitive, frameNumber) {
+  const retired = primitive._spikiveRetiredDrawResources;
+  if (!defined(retired) || retired.length === 0) {
+    return;
+  }
+
+  const next = [];
+  for (let i = 0; i < retired.length; i++) {
+    const entry = retired[i];
+    if (frameNumber - entry.frameNumber <= 0) {
+      next.push(entry);
+      continue;
+    }
+
+    if (defined(entry.shaderProgram)) {
+      entry.shaderProgram.destroy();
+    }
+    if (defined(entry.vertexArray)) {
+      entry.vertexArray.destroy();
+    }
+  }
+  primitive._spikiveRetiredDrawResources = next;
+}
+
+function synchronizeSpikiveGaussianRevealShader(primitive, frameState) {
+  const enabled = isSpikiveGaussianRevealEnabled(primitive._tileset);
+  if (primitive._spikiveRevealShaderEnabled === enabled) {
+    return;
+  }
+
+  primitive._spikiveRevealShaderEnabled = enabled;
+  primitive._tileset.spikiveGaussianSplatRevealShaderActive = false;
+  const drawCommand = primitive._drawCommand;
+  if (!defined(drawCommand)) {
+    return;
+  }
+
+  retireSpikiveGaussianDrawResources(
+    primitive,
+    frameState.frameNumber,
+    drawCommand,
+    undefined,
+  );
+  primitive._drawCommand = undefined;
+  if (
+    primitive._numSplats > 0 &&
+    defined(primitive._indexes) &&
+    defined(primitive._rootTransform) &&
+    defined(primitive.gaussianSplatTexture)
+  ) {
+    GaussianSplatPrimitive.buildGSplatDrawCommand(primitive, frameState);
+  }
+}
+// SPIKIVE_GS_REVEAL_PATCH_END v6

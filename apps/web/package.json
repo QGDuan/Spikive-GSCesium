@@ -1,0 +1,30 @@
+{
+  "name": "@spikive/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "node ../../scripts/patch-cesium-gs-reveal.mjs && node ../../scripts/check-rendering-architecture.mjs",
+    "dev": "vite",
+    "prebuild": "node ../../scripts/patch-cesium-gs-reveal.mjs && node ../../scripts/check-rendering-architecture.mjs",
+    "build": "tsc -p tsconfig.json --noEmit && vite build && node ../../scripts/copy-cesium.mjs",
+    "pretypecheck": "node ../../scripts/patch-cesium-gs-reveal.mjs && node ../../scripts/check-rendering-architecture.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "test": "vitest run src",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@spikive/shared": "0.1.0",
+    "cesium": "1.143.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "tus-js-client": "4.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.7",
+    "@vitejs/plugin-react": "6.0.4",
+    "typescript": "5.9.2",
+    "vite": "8.1.5"
+  }
+}
