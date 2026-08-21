@@ -1,4 +1,4 @@
-import type { Dataset, InspectionLabel, Mission, Vec3 } from "@spikive/shared";
+import type { Dataset, InspectionLabel, Mission, SurfaceHit } from "@spikive/shared";
 import { api } from "../api";
 
 interface LabelPanelProps {
@@ -6,7 +6,7 @@ interface LabelPanelProps {
   labels: InspectionLabel[];
   missions: Mission[];
   labelMode: boolean;
-  pendingPick: Vec3 | null;
+  pendingPick: SurfaceHit | null;
   onToggleMode(): void;
   onCancelPending(): void;
   onSaved(): Promise<void>;
@@ -25,7 +25,8 @@ export function LabelPanel({ dataset, labels, missions, labelMode, pendingPick, 
         description: String(form.get("description") || ""),
         category: String(form.get("category") || "巡检点"),
         color: String(form.get("color")),
-        positionLocal: pendingPick
+        positionLocal: pendingPick.position,
+        surfaceNormalLocal: pendingPick.normal
       });
       await onSaved();
       onMessage("巡检标签已保存并解析表面法向");
@@ -75,7 +76,9 @@ export function LabelPanel({ dataset, labels, missions, labelMode, pendingPick, 
     </button>
     {pendingPick && <form onSubmit={save} className="form-grid card">
       <strong>GS 局部坐标</strong>
-      <code>{pendingPick.x.toFixed(3)}, {pendingPick.y.toFixed(3)}, {pendingPick.z.toFixed(3)}</code>
+      <code>{pendingPick.position.x.toFixed(3)}, {pendingPick.position.y.toFixed(3)}, {pendingPick.position.z.toFixed(3)}</code>
+      <strong>SVO 表面法向</strong>
+      <code>{pendingPick.normal.x.toFixed(3)}, {pendingPick.normal.y.toFixed(3)}, {pendingPick.normal.z.toFixed(3)}</code>
       <label>标题<input name="title" required autoFocus placeholder="设备/缺陷名称" /></label>
       <label>分类<input name="category" defaultValue="巡检点" /></label>
       <label>颜色<input name="color" type="color" defaultValue="#ffb020" /></label>
@@ -87,7 +90,7 @@ export function LabelPanel({ dataset, labels, missions, labelMode, pendingPick, 
     </form>}
     <div className="list label-list">
       {labels.map(label => {
-        const usingMissions = missions.filter(mission => mission.labelIds.includes(label.id));
+        const usingMissions = missions.filter(mission => mission.startLabelId === label.id || mission.labelIds.includes(label.id));
         return <div className="card" key={label.id}>
           <div className="card-title">
             <i style={{ background: label.color }} />

@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Dataset, InspectionLabel, Mission, Vec3 } from "@spikive/shared";
+import type { Dataset, InspectionLabel, Mission, SurfaceHit } from "@spikive/shared";
 import { api } from "./api";
 import { CesiumScene } from "./CesiumScene";
+import { AholoScene } from "./AholoScene";
 import { DatasetPanel } from "./components/DatasetPanel";
+import { InspectionLabelPopup } from "./components/InspectionLabelPopup";
 import { LabelPanel } from "./components/LabelPanel";
 import { MissionPanel } from "./components/MissionPanel";
+import { selectMissionForScene } from "./mission-selection";
 import "./styles.css";
 
 type Tab = "data" | "labels" | "mission";
@@ -20,13 +23,21 @@ export default function App() {
   const [activeMission, setActiveMission] = useState<Mission | null>(null);
   const [tab, setTab] = useState<Tab>("data");
   const [labelMode, setLabelMode] = useState(false);
-  const [pendingPick, setPendingPick] = useState<Vec3 | null>(null);
+  const [pendingPick, setPendingPick] = useState<SurfaceHit | null>(null);
+  const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
   const [message, setMessage] = useState("创建数据集并上传 Gaussian PLY");
+  const [aholoRuntimeFailed, setAholoRuntimeFailed] = useState(false);
   const initializedDatasetSelection = useRef(false);
   const reportedPollingFailure = useRef(false);
   const focusSequence = useRef(0);
   const dataset = datasets.find(value => value.id === selectedId) ?? null;
+  const selectedLabel = labels.find(value => value.id === selectedLabelId && value.datasetId === selectedId) ?? null;
+
+  useEffect(() => setAholoRuntimeFailed(false), [dataset?.id, dataset?.visualBackend, dataset?.aholoVisualRevision]);
+  useEffect(() => {
+    setSelectedLabelId(current => current && labels.some(label => label.id === current && label.datasetId === selectedId) ? current : null);
+  }, [labels, selectedId]);
 
   const applyDatasets = useCallback((values: Dataset[]) => {
     setDatasets(values);
@@ -84,7 +95,7 @@ export default function App() {
         if (cancelled) return;
         setLabels(nextLabels);
         setMissions(nextMissions);
-        setActiveMission(current => current ? nextMissions.find(mission => mission.id === current.id) ?? null : null);
+        setActiveMission(current => selectMissionForScene(current, nextMissions));
       })
       .catch(error => {
         if (!cancelled) setMessage(`场景关联数据加载失败：${errorMessage(error)}`);
@@ -104,15 +115,17 @@ export default function App() {
     setActiveMission(current => current ? nextMissions.find(mission => mission.id === current.id) ?? null : null);
   }, [selectedId]);
 
-  const onPickLabel = useCallback((position: Vec3) => {
-    setPendingPick(position);
+  const onPickLabel = useCallback((hit: SurfaceHit) => {
+    setSelectedLabelId(null);
+    setPendingPick(hit);
     setLabelMode(false);
     setTab("labels");
-    setMessage("已拾取 GS 表面，请填写巡检标签");
+    setMessage("已通过碰撞 SVO 拾取 GS 表面并计算法向，请填写巡检标签");
   }, []);
 
   const selectDataset = useCallback((id: string) => {
     setSelectedId(id);
+    setSelectedLabelId(null);
     setActiveMission(null);
     setPendingPick(null);
     setLabelMode(false);
@@ -124,6 +137,7 @@ export default function App() {
     setLabels([]);
     setMissions([]);
     setActiveMission(null);
+    setSelectedLabelId(null);
     setPendingPick(null);
     setLabelMode(false);
     setFocusRequest(null);
@@ -140,6 +154,7 @@ export default function App() {
         setLabels([]);
         setMissions([]);
         setActiveMission(null);
+        setSelectedLabelId(null);
         setPendingPick(null);
         setLabelMode(false);
       }
@@ -165,6 +180,25 @@ export default function App() {
     setMessage(`“${target.name}”已开始高清 LOD 重建；当前已发布版本继续可用`);
   }, [datasets, refreshDatasets]);
 
+  const buildAholoVisuals = useCallback(async (id: string) => {
+    const target = datasets.find(value => value.id === id);
+    if (!target || !window.confirm(`为“${target.name}”构建独立 AHoLo Chunk LOD 候选？\n\n将串行生成高精度 ESZ 和一次无损 PLY 对照；生产 Cesium、碰撞、标签和航迹不会改变。`)) return;
+    await api.rebuildDatasetVisuals(id);
+    await refreshDatasets();
+    setMessage(`“${target.name}”已开始构建 AHoLo 候选；可继续使用当前生产视图`);
+  }, [datasets, refreshDatasets]);
+
+  const switchRenderer = useCallback(async (id: string, backend: Dataset["visualBackend"]) => {
+    const target = datasets.find(value => value.id === id);
+    if (!target) return;
+    if (!window.confirm(backend === "aholo-chunk-lod"
+      ? `将“${target.name}”的本地巡检视图切换到 AHoLo？\n\n请先在 /renderer-lab 完成画质和生命周期验收；仍可一键回滚 Cesium。`
+      : `将“${target.name}”回滚到 Cesium 本地巡检视图？`)) return;
+    await api.setRenderBackend(id, backend);
+    await refreshDatasets();
+    setMessage(backend === "aholo-chunk-lod" ? "已切换到 AHoLo 单 Renderer" : "已回滚到 Cesium 单 Renderer");
+  }, [datasets, refreshDatasets]);
+
   const deleteMission = useCallback(async (id: string) => {
     const target = missions.find(value => value.id === id);
     if (!target || !window.confirm(`永久删除任务“${target.name}”？\n\n该任务及全部航迹点都会被删除，且无法恢复；模型和巡检标签会保留。`)) return;
@@ -177,6 +211,12 @@ export default function App() {
       setMessage(`删除任务失败：${errorMessage(error)}`);
     }
   }, [missions, refreshMissions]);
+
+  const selectInspectionLabel = useCallback((id: string) => {
+    setSelectedLabelId(id);
+    setMessage("已选中巡检对象；场景高亮并显示空间详情");
+  }, []);
+  const closeInspectionLabel = useCallback(() => setSelectedLabelId(null), []);
 
   return <div className="app-shell">
     <header>
@@ -207,6 +247,8 @@ export default function App() {
           onClearView={clearModelView}
           onRetry={retryDataset}
           onRebuild={rebuildDatasetTiles}
+          onBuildAholo={buildAholoVisuals}
+          onSwitchRenderer={switchRenderer}
           onDelete={id => void deleteDataset(id)}
           onMessage={setMessage}
         />}
@@ -216,7 +258,7 @@ export default function App() {
           missions={missions}
           labelMode={labelMode}
           pendingPick={pendingPick}
-          onToggleMode={() => { setLabelMode(current => !current); setPendingPick(null); }}
+          onToggleMode={() => { setLabelMode(current => !current); setPendingPick(null); setSelectedLabelId(null); }}
           onCancelPending={() => { setPendingPick(null); setMessage("已取消待保存标签"); }}
           onSaved={async () => { setPendingPick(null); await refreshLabels(); }}
           onRefresh={async () => { await Promise.all([refreshLabels(), refreshMissions()]); }}
@@ -236,22 +278,39 @@ export default function App() {
       </section>
     </aside>
     <main>
-      <CesiumScene
-        dataset={dataset}
-        labels={labels}
-        mission={activeMission}
-        labelMode={labelMode}
-        pendingPick={pendingPick}
-        focusRequest={focusRequest}
-        onPickLabel={onPickLabel}
-        onMessage={setMessage}
-      />
+      {dataset?.visualBackend === "aholo-chunk-lod" && !aholoRuntimeFailed
+        ? <AholoScene
+            dataset={dataset}
+            labels={labels}
+            mission={activeMission}
+            labelMode={labelMode}
+            pendingPick={pendingPick}
+            selectedLabelId={selectedLabelId}
+            focusRequest={focusRequest}
+            onPickLabel={onPickLabel}
+            onSelectLabel={selectInspectionLabel}
+            onMessage={setMessage}
+            onFatal={reason => { setAholoRuntimeFailed(true); setMessage(`AHoLo 已有界停止，当前会话回退 Cesium：${reason}`); }}
+          />
+        : <CesiumScene
+            dataset={dataset}
+            labels={labels}
+            mission={activeMission}
+            labelMode={labelMode}
+            pendingPick={pendingPick}
+            selectedLabelId={selectedLabelId}
+            focusRequest={focusRequest}
+            onPickLabel={onPickLabel}
+            onSelectLabel={selectInspectionLabel}
+            onMessage={setMessage}
+          />}
       <div className="legend">
         <span><i className="orange" />GS 巡检标签</span>
         <span><i className="red" />标签航迹点</span>
         <span><i className="blue" />途经点</span>
         <span><i className="green" />已校验航线</span>
       </div>
+      {selectedLabel && <InspectionLabelPopup label={selectedLabel} onClose={closeInspectionLabel} />}
     </main>
   </div>;
 }

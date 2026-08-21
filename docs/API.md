@@ -12,9 +12,20 @@
 | `POST` | `/api/datasets` | 创建数据集和上传元数据 |
 | `GET/PATCH/DELETE` | `/api/datasets/:id` | 详情、摆放/处理参数更新、删除 |
 | `POST` | `/api/datasets/:id/retry` | 重试失败任务 |
+| `POST` | `/api/datasets/:id/rebuild-tiles` | 按固定 V2 策略重建视觉 Tiles；不重建碰撞 |
+| `POST` | `/api/datasets/:id/rebuild-visuals` | 按固定 AHoLo 策略构建候选 ESZ + 无损 PLY Chunk；不切换生产 Renderer |
 | tus | `/api/uploads` | 最大 5 GiB 断点续传；metadata 必须含 `datasetId` |
 | `GET` | `/api/datasets/:id/tiles/tileset.json` | 注入 WGS84 transform 的入口 |
 | `GET` | `/api/datasets/:id/tiles/*` | GLB 等流式资源 |
+| `GET` | `/api/datasets/:id/visual-revisions/:revision/tiles/*` | 指定不可变视觉 revision 的资源 |
+| `GET` | `/api/datasets/:id/lod-report` | 活动视觉 revision 的切片质量报告 |
+| `POST` | `/api/datasets/:id/visual-revisions/:revision/activate` | 回滚/切换到仍在保留期的已验收视觉 revision |
+| `GET` | `/api/datasets/:id/render-manifest?backend=...` | 指定 Renderer 的无缓存版本清单、坐标契约与碰撞 revision |
+| `GET` | `/api/datasets/:id/aholo-visual-revisions/:revision/:format/lod-meta.json` | AHoLo ESZ/PLY 版本化 LOD 清单 |
+| `GET` | `/api/datasets/:id/aholo-visual-revisions/:revision/:format/*` | 不可变 ESZ/PLY Chunk，缓存一年 |
+| `GET` | `/api/datasets/:id/aholo-visual-revisions/:revision/report` | AHoLo 构建与覆盖质量报告 |
+| `POST` | `/api/datasets/:id/aholo-visual-revisions/:revision/activate` | 切换到仍在七天保留期内且摘要匹配的 AHoLo revision |
+| `POST` | `/api/datasets/:id/render-backend` | 显式切换 `cesium-3dtiles` / `aholo-chunk-lod` |
 | `GET` | `/api/datasets/:id/collision/*` | 碰撞调试资源 |
 
 创建数据集的关键字段：`sceneType`、`inputConvention`、`voxelSize`、`voxelOpacity`、`placement`。当前 `inputConvention` 固定为 `graphdeco`；室内模式还必须提供已知自由空间 `indoorSeed`。
@@ -22,6 +33,10 @@
 `voxelSize`、`voxelOpacity` 和 `indoorSeed` 只允许在 `created` 或 `failed` 状态修改；上传或发布后修改但不重建碰撞体会造成配置与产物不一致，因此服务返回 `409`。名称和 WGS84 摆放不受此限制。请求体不满足 Zod 契约时统一返回 `400` 和结构化 `details`。
 
 碰撞可变网格超过工具内存保护阈值时，失败信息会包含建议的最小 `voxelSize`，但服务绝不自动应用。操作员应先 `PATCH /api/datasets/:id` 明确提交确认后的体素尺寸，再调用 retry；现有且重新验收通过的 Gaussian 3D Tiles 会被复用。体素尺寸变大意味着碰撞分辨率降低，重试成功不替代细障碍和航迹净空验收。
+
+数据集响应中的 `activeVisualRevision` / `lodPolicyVersion` 保持代表 Cesium 兼容视觉版本；`aholoVisualRevision` / `aholoPolicyVersion` 代表独立 AHoLo 候选版本，`visualBackend` 是生产本地巡检 Renderer。候选构建不暗中切换 `visualBackend`。名称或 WGS84 placement 更新只改变展示边界，不再冒充视觉 revision。版本化内容 URI 缓存一年，活动 manifest 不缓存；切换接口会重新核对产物完整性。
+
+AHoLo 的 `minLevel`、`maxBudget`、`backgroundPenalty`、`distanceStep` 和调度选项属于浏览器会话级 Renderer 参数，通过 AHoLo 公共 `LodSplat.setConfig()` 生效；服务端不提供持久化接口，也不会用这些参数改变 Chunk 产物、碰撞、标签或航迹。
 
 `DELETE /api/datasets/:id` 是永久删除：服务会先取消该数据集正在执行的切片/碰撞任务，再删除上传临时文件、原始 PLY、工作目录和已发布资源。数据库外键会级联删除标签、任务及航迹点。
 
@@ -66,7 +81,7 @@
 
 每一对 `Home / 观察点 / Home` 先按“机体半径 + 安全余量”做扫掠球直线检查。SVO 运行时的扫掠采样间距固定不大于半个碰撞体素，并结合占用体素立方体的半对角线保守膨胀，避免整体素采样因起点相位不同漏掉斜穿障碍。受阻后使用 26 邻域三维 A*；A* 的每条相邻边也执行同一检查，禁止只验证端点后斜穿障碍。得到的网格最短路经过碰撞捷径平滑、最小间距安全删点、最大航段等距细分，最后对每个点和每一条最终航段重新扫掠校验。最终点数超过 5,000 时任务保持 `invalid` 且不保存路线；某一后续目标无通路或最终复检中途失败时，只保存失败位置之前已经按顺序复检通过的安全前缀作为可视化调试预览。该前缀不是候选航线，任务仍为 `invalid`，不能导出或执行。
 
-创建、修改和重新规划任务时，服务端都会校验 `startLabelId` 和每个 `labelId` 存在且属于任务的 `datasetId`，跨 GS 场景绑定返回 `409`。标签对应的 inspection waypoint 和标签起点通过 `targetLabelId` 保留关联，前端名称显示为 `hj_标签名`。
+创建、修改和重新规划任务时，服务端都会校验 `startLabelId` 和每个 `labelId` 存在且属于任务的 `datasetId`，跨 GS 场景绑定返回 `409`。标签对应的 inspection waypoint 和标签起点通过 `targetLabelId` 保留关联，并保留内部语义名称 `hj_标签名`；场景只显示红色航迹点，不显示重复的 `hj_` 文字。
 
 修改任务的 Home、起点标签、标签顺序或飞行参数会立即清除旧航迹并把任务恢复为 `draft`。PATCH 未提交的字段保持原值；例如只修改任务名称绝不能把 `startLabelId` 隐式清空。修改标签位置、表面法向或执行法向翻转，也会使所有引用任务恢复为 `draft` 并清除旧航迹，防止继续显示或导出与当前标签几何不一致的 `valid` 结果。
 
@@ -75,4 +90,4 @@
 
 `DELETE /api/missions/:id` 只永久删除指定任务及其航迹点，不删除关联的数据集和巡检标签。前端每条任务都有独立“删除航线任务”入口并要求二次确认。
 
-Cesium 中有效任务的 inspection 点以红色显示并命名为 `hj_<标签名>`，A*/细分生成的 transit 点以蓝色显示；Home 为中性色，已校验折线为绿色。最终复检失败产生的严格安全前缀使用橙色折线并标为“部分预览”，不绘制失败点、失败航段或任何猜测后缀；只有完整 `valid` 航线可以导出。
+Cesium 与 AHoLo 中有效任务的 inspection 点以红色显示，内部命名为 `hj_<标签名>` 但不绘制该文字；A*/细分生成的 transit 点以蓝色显示，Home 为中性色，已校验折线为绿色。巡检对象标签本身可点击，选中时高亮并显示持久化位置、法向和解析状态。最终复检失败产生的严格安全前缀使用橙色折线并标为“部分预览”，不绘制失败点、失败航段或任何猜测后缀；只有完整 `valid` 航线可以导出。

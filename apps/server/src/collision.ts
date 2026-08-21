@@ -168,13 +168,11 @@ export class VoxelCollisionWorld {
         continue;
       }
       if (!occupied) continue;
-      const r = this.resolution;
-      const gradient = {
-        x: Number(this.isOccupied(add(point, { x: -r, y: 0, z: 0 }))) - Number(this.isOccupied(add(point, { x: r, y: 0, z: 0 }))),
-        y: Number(this.isOccupied(add(point, { x: 0, y: -r, z: 0 }))) - Number(this.isOccupied(add(point, { x: 0, y: r, z: 0 }))),
-        z: Number(this.isOccupied(add(point, { x: 0, y: 0, z: -r }))) - Number(this.isOccupied(add(point, { x: 0, y: 0, z: r })))
-      };
-      return { position: point, normal: normalize(gradient) ?? mul(unitDirection, -1), distance: value };
+      const normal = this.occupancyGradient(point) ?? this.voxelEntryFaceNormal(point, unitDirection);
+      // The fallback is the actual face through which this free-to-solid ray
+      // entered the occupied voxel. It handles isolated thin features whose
+      // symmetric central occupancy gradient legitimately cancels to zero.
+      return { position: point, normal, distance: value };
     }
     return null;
   }
@@ -196,6 +194,14 @@ export class VoxelCollisionWorld {
     return { position: best, normal: bestNormal, distance: bestDistance };
   }
 
+  validateSurfaceNormal(point: Vec3, normal: Vec3): SurfaceHit | null {
+    const unit = normalize(normal);
+    if (!unit || !this.contains(point) || !this.isOccupied(point)) return null;
+    const outside = add(point, mul(unit, this.resolution));
+    if (!this.contains(outside) || this.isOccupied(outside)) return null;
+    return { position: point, normal: unit, distance: 0 };
+  }
+
   private occupancyGradient(point: Vec3) {
     const r = this.resolution;
     return normalize({
@@ -203,6 +209,27 @@ export class VoxelCollisionWorld {
       y: Number(this.isOccupied(add(point, { x: 0, y: -r, z: 0 }))) - Number(this.isOccupied(add(point, { x: 0, y: r, z: 0 }))),
       z: Number(this.isOccupied(add(point, { x: 0, y: 0, z: -r }))) - Number(this.isOccupied(add(point, { x: 0, y: 0, z: r })))
     });
+  }
+
+  private voxelEntryFaceNormal(point: Vec3, direction: Vec3): Vec3 {
+    const min = arrayVec(this.metadata.gridBounds.min);
+    let bestDistance = Number.POSITIVE_INFINITY;
+    let best: Vec3 = mul(direction, -1);
+    for (const axis of ["x", "y", "z"] as const) {
+      const component = direction[axis];
+      if (Math.abs(component) < 1e-12) continue;
+      const cell = Math.floor((point[axis] - min[axis]) / this.resolution);
+      const lower = min[axis] + cell * this.resolution;
+      const upper = lower + this.resolution;
+      const backwards = component > 0
+        ? (point[axis] - lower) / component
+        : (upper - point[axis]) / -component;
+      if (backwards >= bestDistance) continue;
+      bestDistance = backwards;
+      best = { x: 0, y: 0, z: 0 };
+      best[axis] = component > 0 ? -1 : 1;
+    }
+    return best;
   }
 }
 

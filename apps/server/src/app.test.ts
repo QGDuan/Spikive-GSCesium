@@ -109,6 +109,7 @@ describe("scene-bound label and mission API", () => {
       mkdirSync(path.join(published, "collision"), { recursive: true });
       writeFileSync(path.join(directory, "sources", `${dataset.id}.ply`), "source");
       writeFileSync(path.join(published, "tiles", "tileset.json"), JSON.stringify({ asset: { version: "1.1" }, root: { geometricError: 1, content: { uri: "tiles/0.glb" } } }));
+      writeFileSync(path.join(published, "tiles", "build_summary.json"), JSON.stringify({ converted_splats: 1 }));
       for (const name of ["scene.voxel.json", "scene.voxel.bin", "scene.collision.glb"]) writeFileSync(path.join(published, "collision", name), "artifact");
       db.updateDataset(dataset.id, { status: "ready", collisionStatus: "ready", progress: 100, stage: "已发布" });
 

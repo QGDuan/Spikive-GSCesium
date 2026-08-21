@@ -49,6 +49,8 @@ describe("voxel collision reader", () => {
     const hit = world.raycast({ x: 0.1, y: 0.1, z: 0.1 }, { x: 1, y: 0, z: 0 });
     expect(hit).not.toBeNull();
     expect(hit!.position.x).toBeGreaterThanOrEqual(2);
+    expect(hit!.normal).toEqual({ x: -1, y: 0, z: 0 });
+    expect(world.validateSurfaceNormal(hit!.position, hit!.normal)).not.toBeNull();
   });
 
   it("does not invent a surface normal for an interior occupied point", () => {

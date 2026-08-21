@@ -2,7 +2,7 @@
 
 本文定义平台固定使用的 Gaussian 3D Tiles 分层策略和首次加载展示状态机。实现不得依赖转换器或 Cesium 的隐式默认值；调整这些参数需要修改本文、回归测试和代码常量。
 
-## 1. 固定 LOD 策略
+## 1. 固定 LOD 策略 V2
 
 平台固定参数如下：
 
@@ -10,11 +10,12 @@
 |---|---:|---|
 | `maxLeafLimit` | 25,000 | 最细分区的目标 Gaussian 预算 |
 | `minLeafLimit` | 2,500 | 普通空间切分停止阈值 |
-| `samplingRatePerLevel` | 0.5 | 相邻父子 LOD 的 Gaussian 保留率 |
-| `lodMultiplier` | `max` | 使用转换器最积极的 geometric error 曲线，使细层在更远距离开始细化 |
-| `coverageBoostScale` | 0.8 | 补偿简化父层的视觉覆盖 |
-| `opacityFilter` | 0.05 | 切片前过滤极低透明度 Gaussian |
-| geometric error multiplier/scale | 1 / 1 | 不对转换器估计结果做二次放大 |
+| `samplingRatePerLevel` | 0.65 | 提高父层 Gaussian 保留率并增加自适应逻辑层数 |
+| `lodMultiplier` | `max` | 使用数据量自适应的基础 geometric error 曲线 |
+| `coverageBoostScale` | 0.6 | 父层更密后减少椭球覆盖膨胀，降低远景模糊 |
+| `opacityFilter` | 0.02 | 仅过滤极低透明度 Gaussian，保留细弱结构 |
+| geometric error layer multiplier | 1.35 | 提高粗层误差，使详细子层从更远距离开始细化 |
+| geometric error scale | 2.5 | 固定放大整条误差曲线，抵消深层重估并让详细层从更远处开始细化 |
 | bounds | AABB | 固定轴对齐包围盒，便于一致审计 |
 | 转换内存预算 | 4 GiB | 控制 Worker 转换峰值，不是浏览器缓存 |
 
@@ -26,47 +27,41 @@
 
 ```text
 depth = 0                                      , N <= 25,000
-depth = ceil(log(25,000 / N) / log(0.5))       , N > 25,000
+depth = ceil(log(25,000 / N) / log(0.65))      , N > 25,000
 LOD 层数 = depth + 1
 ```
 
-对应关系：
+层数不是小数据的固定开销：不超过 25,000 个有效 Gaussian 仍只有一层。2,468,428 点场景为最大深度 11、共 12 层；当前 14,224,203 输入在 `opacityFilter=0.02` 后预计保留 13,975,115 点，最大深度 15、共 16 层。物理 KD 树目录只是存储实现；前端不得把物理 Level 15/17 映射成逻辑 LOD。
 
-| 有效 Gaussian 数量 | 最大深度 | LOD 层数 |
-|---:|---:|---:|
-| ≤ 25,000 | 0 | 1 |
-| 25,001–50,000 | 1 | 2 |
-| 50,001–100,000 | 2 | 3 |
-| 100,001–200,000 | 3 | 4 |
-| 200,001–400,000 | 4 | 5 |
-| 400,001–800,000 | 5 | 6 |
-| 800,001–1,600,000 | 6 | 7 |
-| 1,600,001–3,200,000 | 7 | 8 |
-| 3,200,001–6,400,000 | 8 | 9 |
-| 6,400,001–12,800,000 | 9 | 10 |
-| 12,800,001–25,600,000 | 10 | 11 |
+当前代表场景的旧产物约 425 MiB，V2 预计约 630–650 MiB。发布硬上限为 700 MiB；超过上限时保留旧活动 revision 并失败，不自动修改参数。源 PLY 永久保留，SH 阶数必须前后一致；当前数据为 SH0，切片不能创造源中不存在的高阶视角颜色。
 
-层数仍不是小数据的固定开销。例如有效 Gaussian 为 2,468,428 时，按公式得到最大深度 7、共 8 层；13,518,212 点场景得到最大深度 10、共 11 层。与旧的 50,000 / 5,000 / `high` 档相比，这一固定高清档增加一层真实空间细分，并让 Cesium 更早请求细层。更大的数据仍只按二倍数量增加一层，浏览器通过视锥和屏幕空间误差按需请求局部 Tile，不会因为层数增加而一次加载整个场景。
+V2首轮真实构建证明，仅增加层数会使转换器重新估算叶层误差：全局 scale 为1时，根误差由旧版45.75降至21.05，1500/500/100米的静态选择密度不能达到目标。V2.1因此把全局 scale 固定为2.5；在1080p、60°垂直FOV、稳定SSE16的审计相机下，预计相对旧版在1500米多细化1层、500米3层、100米4层。该值是平台版本常量，不根据帧率或设备静默调整。
 
-`N` 是过滤后的有效数量。`opacityFilter=0.05` 意味着极低透明度 Gaussian 不属于发布数据；如果项目要求逐点保留原始 PLY，需要单独变更策略并重新评估网络、显存和视觉噪声，不能临时修改单个任务。
+### 质量报告与版本发布
+
+每个视觉 revision 都生成 `lod-report.json`，记录源摘要、转换器与策略版本、逻辑/物理层数、逐层 Tile/Gaussian/字节/geometricError、尺度异常统计、终端覆盖、Tiles payload 和碰撞校验摘要。发布前要求终端 Tile Gaussian 总数等于 `converted_splats`、逐层总数单调、逻辑层数匹配自动深度、SH 阶数一致且产物不超过上限。
+
+活动版本由 `artifact-manifest.json` 指向 `visual-revisions/<revision>/tiles/`。manifest 切换前旧版持续服务；切换后旧活动版保留七天，可通过受控接口回滚。碰撞仍位于独立目录，视觉重建不复制、不重建、不失效碰撞，也不改变标签和航迹。
 
 ## 2. Cesium 运行期策略
 
 稳定浏览阶段固定为：
 
 - `maximumScreenSpaceError = 16`；
-- `dynamicScreenSpaceError = true`；
+- `dynamicScreenSpaceError = false`，只按切片写入的 geometric error 细化；
 - `foveatedScreenSpaceError = false`；
 - `progressiveResolutionHeightFraction = 0`；
 - `skipLevelOfDetail = false`，避免透明 Gaussian 父子层同时渲染产生重影；
 - `cullRequestsWhileMoving = false`，保留当前针对 Cesium Gaussian 资源销毁竞争的稳定性设置；
 - Tile 缓存 384 MiB，允许额外 128 MiB 临时溢出。
+- 浏览器推荐分辨率关闭，有效像素比固定为 `min(devicePixelRatio, 1.5)`；
+- 渲染错误恢复不得把 SSE 提高到 32–64，连续失败时停止有界重试并要求重新加载。
 
 ### 已发布场景的高清重建
 
-`POST /api/datasets/:id/rebuild-tiles` 只对 `ready` 数据集开放。任务进入 `rebuilding` 后仅重建可视化 Tiles，上一已发布版本、碰撞体、标签和航迹继续服务；新 Tiles 和已验证的原碰撞产物在独立工作目录汇合并整体切换。重建失败时状态恢复为 `ready` 并继续使用上一版本，不把展示策略变更传播为碰撞、标签或航迹失效。
+`POST /api/datasets/:id/rebuild-tiles` 只对 `ready` 数据集开放。任务进入 `rebuilding` 后仅从受管源 PLY 重建可视化 Tiles，上一视觉版本、碰撞体、标签和航迹继续服务。新 Tiles 完成质量报告后进入独立 revision，再原子切换 manifest。重建失败时恢复 `ready` 并继续使用旧活动 revision。
 
-切换前会保留可恢复的上一发布目录，进程中断后优先恢复；新 Tiles 的 URI 附带数据集修订号，避免浏览器一年的不可变缓存继续命中旧 GLB。重建完成时前端只重新创建该数据集的 Tileset，仍不创建第二个 GS Renderer。当前实现的目录替换发生在同一磁盘卷内；后续演进到对象存储时应升级为版本化 Artifact Manifest 和活动版本指针。
+根 tileset 继续由稳定 API 提供，但所有内容 URI 指向不可变 revision 路径，避免浏览器一年的缓存命中旧 GLB。重建完成时前端只重新创建该数据集的 Tileset，仍不创建第二个 GS Renderer。
 
 ## 3. Luma 风格初始化状态机
 

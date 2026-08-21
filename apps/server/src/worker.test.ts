@@ -19,15 +19,26 @@ describe("collision coordinate normalization", () => {
     expect(calculateGsLodDepth(25_000)).toBe(0);
     expect(calculateGsLodDepth(25_001)).toBe(1);
     expect(calculateGsLodDepth(50_001)).toBe(2);
-    expect(calculateGsLodDepth(2_468_428)).toBe(7);
-    expect(calculateGsLodDepth(13_518_212)).toBe(10);
-    expect(fixedGsTilerArguments()).toContain("--max-leaf-limit");
+    expect(calculateGsLodDepth(2_468_428)).toBe(11);
+    expect(calculateGsLodDepth(13_975_115)).toBe(15);
+    expect(fixedGsTilerArguments()).toEqual(expect.arrayContaining([
+      "--sampling-rate-per-level", "0.65",
+      "--coverage-boost-scale", "0.6",
+      "--opacity-filter", "0.02",
+      "--geometric-error-layer-multiplier", "1.35",
+      "--geometric-error-scale", "2.5"
+    ]));
   });
 
   it("rejects converter output that drifts from the fixed LOD policy", () => {
-    const summary = { converted_splats: 2_468_428, max_depth: 7, max_depth_source: "auto", max_leaf_limit: 25_000, min_leaf_limit: 2_500, sampling_rate_per_level: 0.5, lod_multiplier_preset: "max", coverage_boost_scale: 0.8, opacity_filter: 0.05, bounds_mode: "aabb" };
+    const summary = {
+      converted_splats: 2_468_428, max_depth: 11, max_depth_source: "auto",
+      max_leaf_limit: 25_000, min_leaf_limit: 2_500, sampling_rate_per_level: 0.65,
+      lod_multiplier_preset: "max", coverage_boost_scale: 0.6, opacity_filter: 0.02,
+      geometric_error_layer_multiplier: 1.35, geometric_error_scale: 2.5, bounds_mode: "aabb"
+    };
     expect(() => validateFixedGsLodSummary(summary)).not.toThrow();
-    expect(() => validateFixedGsLodSummary({ ...summary, max_depth: 8 })).toThrow(/固定策略/);
+    expect(() => validateFixedGsLodSummary({ ...summary, max_depth: 12 })).toThrow(/固定策略/);
     expect(() => validateFixedGsLodSummary({ ...summary, converted_splats: undefined })).toThrow(/converted_splats/);
   });
 

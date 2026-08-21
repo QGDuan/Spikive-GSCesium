@@ -2,23 +2,25 @@
 
 ## 1. 决策摘要
 
-本系统采用“显示模型与碰撞模型分离”的方案。Gaussian 3D Tiles 负责照片级显示和流式 LOD；稀疏体素负责占用判断、表面解析和路径规划。原因是 GS 属于半透明渲染表示，前端深度不能作为无人机碰撞安全依据。
+本系统采用“显示模型与碰撞模型分离”的方案。Cesium Gaussian 3D Tiles 与候选 AHoLo Chunk LOD 负责照片级显示；稀疏体素负责占用判断、表面解析和路径规划。原因是 GS 属于半透明渲染表示，任一前端 Renderer 的深度都不能作为无人机碰撞安全依据。
 
 核心语义固定为：
 
 ```text
 PLY
- ├─ Gaussian 3D Tiles ── Cesium 显示 ── 用户手动拾取巡检标签
+ ├─ Gaussian 3D Tiles ── Cesium 回滚/地图显示 ─┐
+ ├─ AHoLo Chunk LOD ── 本地巡检候选显示 ──────┼─ 相机射线 → SVO 手动拾取标签
  └─ SVO/Collision GLB ── 法向解析 ── 观察点生成 ── 三维避障航迹
 ```
 
 ## 2. 组件
 
-- `apps/web`：React、CesiumJS、tus-js-client；负责上传、标签拾取和路线呈现。
+- `apps/web`：React、CesiumJS、AHoLoJS、tus-js-client；负责上传、互斥 Renderer、标签拾取和路线呈现。
 - `apps/server`：Fastify、Node SQLite、后台 worker、体素查询和路径规划。
 - `packages/shared`：Zod 输入契约、公共类型和向量运算。
 - `3dgs-ply-3dtiles-converter`：PLY → 分层 SPZ Gaussian 3D Tiles。
 - `splat-transform`：PLY → SVO 体素与 collision GLB。
+- `@manycore/aholo-splat-transform`：PLY → 无损 Chunk LOD → 逐 Chunk 高精度 ESZ。
 
 平台为单机可部署 MVP：SQLite、磁盘存储和单并发 GPU worker。单机路径清晰、可恢复，未来可将 worker、对象存储和数据库替换为 Redis/MinIO/PostgreSQL，而不改变前端接口语义。
 
@@ -32,6 +34,7 @@ SQLite 固定使用 WAL。连接初始化必须先设置 `busy_timeout`，再读
 created → uploading → queued → tiling → collision_processing → ready
                                       └──────────────────────→ failed → retry
 ready → rebuilding visual tiles → ready（期间继续提供上一发布版本）
+ready → rebuilding AHoLo candidate → ready（期间生产 Renderer 不变）
 ```
 
 上传完成后，原始 PLY 移到不可由文件名控制的 UUID 路径。转换器通过参数数组启动，未使用 shell。两个产物都完成后才将工作目录原子发布；进程重启会把处理中状态恢复为排队状态。
@@ -42,9 +45,11 @@ ready → rebuilding visual tiles → ready（期间继续提供上一发布版�
 
 转换器会在 `build_summary.json` 审计源轴向。碰撞 Worker 读取该结果，将 camera Y-down/Z-forward、glTF Y-up 或原生 Z-up 自动归一到与 3D Tiles 相同的局部 Z-up 坐标；无法识别轴向时任务失败，禁止发布错位产物。
 
-Gaussian LOD 不固定层数。平台高清档固定最细分区 25,000 Gaussian、普通切分停止阈值 2,500、父层 0.5 采样率和转换器 `max` 细化曲线；最大深度根据过滤后的有效 Gaussian 数量按二倍区间增长。小数据自动减少层级，大数据增加层级但仍由 Cesium 按视锥和 SSE 局部请求；稳定浏览 SSE 固定为 16，Tile 缓存仍限制为 384 MiB + 128 MiB 临时溢出。Worker 会校验转换摘要，阻止参数漂移的产物发布。完整公式、参数和首次加载相机状态机见 [GS LOD 与初始化展示固定策略](LOD_AND_INTRO.md)。
+Gaussian LOD 不固定层数。V2.1 高清档固定最细分区 25,000 Gaussian、普通切分停止阈值 2,500、父层 0.65 采样率、`max` 基础曲线、1.35 coarse-layer multiplier、2.5 global geometric-error scale、0.6 覆盖补偿和 0.02 透明度过滤；最大逻辑深度根据有效 Gaussian 数量自适应。当前 14.22M 输入由11层增至16层、约602 MiB，且仍由Cesium按视锥和SSE局部请求。稳定浏览SSE固定16、动态SSE关闭、有效像素比上限1.5，缓存保持384 MiB + 128 MiB。完整公式与验收见 [GS LOD 与初始化展示固定策略](LOD_AND_INTRO.md)。
 
-已发布模型可执行可视化专用高清重建：不可变源 PLY 重新生成 Tiles，原碰撞制品通过完整性校验后复用，标签和航迹不失效。重建期间旧发布版本继续服务；失败回退旧版，成功后整体提升并通过修订化 Tile URI 规避浏览器旧缓存。这个流程不重复运行碰撞生成，也不自动调整任何碰撞参数。
+已发布模型可执行可视化专用高清重建：不可变源 PLY 重新生成 Tiles，原碰撞制品只做完整性与摘要校验，标签和航迹不失效。重建期间活动视觉 revision 继续服务；新 revision 验收后只原子切换 artifact manifest，并将旧活动版保留七天。碰撞目录不会被复制、替换或重新加载，版本化 Tile URI 也避免浏览器混用新旧 GLB。这个流程不重复运行碰撞生成，也不自动调整任何碰撞参数。
+
+AHoLo 候选拥有独立工作目录、manifest 和 revision。唯一 LOD 拓扑先从不可变源 PLY 生成无损 PLY Chunk，再逐 Chunk 编码 ESZ v2；每个 Chunk 写完后释放解码资源，保证 ESZ 与对照 PLY 的块、点数和层级一一对应。候选验收成功不自动切换生产 Renderer，只有显式操作才改变 `visualBackend`。AHoLo 只接管显示、相机射线和覆盖物：射线仍提交后端 SVO，法向、标签吸附、体素碰撞和航迹规划没有前端副本。会话面板通过公开 `LodSplat.setConfig()` 显式调整 LOD/minLevel/预算与调度参数，不持久化、不自动降质，也不改变任何碰撞或任务 revision。完整契约见 [AHoLo Renderer 迁移与验收](AHOLO_RENDERER_MIGRATION.md)。
 
 首次加载的 Luma 风格效果属于纯展示依赖：公开的 Tileset 参数继续负责 LOD 请求，一个版本锁定且可验证的 Cesium Gaussian Shader 扩展只在输入锁定的 20 秒内把已加载高斯从中心种子扩张为完整椭球。应用通过独立控制器与该扩展通信，不访问 Cesium 私有 Primitive；退出后重建回原始 Shader。Reveal 不产生第二份 GS、不参与碰撞和路径规划，也不能改变标签/任务的数据依赖。它不是第二套渲染系统：同一时刻仍只有一个 Viewer、一个 Gaussian Primitive、一个 DrawCommand 和一个活动 ShaderProgram。为何保留阶段性 Shader 变体而不改成永久组合 Shader，见 [Cesium GS Reveal 渲染架构决策](CESIUM_GS_RENDERING.md)。
 
@@ -63,7 +68,7 @@ Gaussian LOD 不固定层数。平台高清档固定最细分区 25,000 Gaussian
 
 数据管理闭环覆盖“上传临时态 → 完整性与坐标校验 → 不可变源数据 → 隔离派生 → 产物验收 → 原子发布 → 依赖绑定 → 失效传播 → 重建 → 监控/备份 → 按依赖删除”。源 PLY 与数据库元数据属于不可替代资产；Tiles 和碰撞体只有在保存了源版本、工具版本、固定策略、参数和构建摘要时才可视为可重建资产。
 
-当前 MVP 已实现 UUID 路径、处理状态、构建摘要校验、隔离工作目录、原子发布、数据库外键级联和标签/任务失效传播。`npm run audit:data` 提供只读对账，检查 SQLite、跨场景引用、标签/航迹引用、ready 制品以及 `sources/work/published` 的孤儿数据。下一阶段应增加源与产物 checksum、显式 source/artifact revision、processing run 和依赖指纹。任何自动清理只能处理无引用的临时、失败或已被替代且可重建的产物；发现孤儿记录、孤儿文件或依赖不匹配时先隔离和告警，不自动猜测修复。
+当前系统已实现 UUID 路径、处理状态、源/Tiles/碰撞校验摘要、视觉 artifact revision、LOD 质量报告、活动 manifest、七天上一版本保留、数据库外键级联和标签/任务失效传播。`npm run audit:data` 对账 SQLite、活动 manifest、跨场景引用、ready 制品及孤儿数据。视觉 revision 与碰撞 revision 独立：只有源或碰撞语义变化才向标签和任务传播失效，纯视觉重建不传播。任何自动清理只处理明确过期且非活动的视觉 revision；歧义数据只报告，不猜测修复。
 
 ### 碰撞内存与分区边界
 
@@ -104,7 +109,7 @@ Gaussian LOD 不固定层数。平台高清档固定最细分区 25,000 Gaussian
 7. 安全折线按操作员确认的 `maximumSegmentLength`（默认 5 m）等距细分，保留 Home 或标签起点，以及 `hj_<标签名>` 检查点。标签起点通过 `startLabelId` 持久化，不得在中间巡检顺序中重复。最终所有点和每一航段再次按“机体半径 + 安全余量”复检；超过 5,000 点时任务保持 `invalid` 且不保存路线。某一后续目标无通路或最终复检中途失败时，可持久化失败位置之前严格按序复检通过的前缀，但它只用于调试可视化，保持 `invalid` 且禁止导出或执行。
 8. 航点删减和细分完成后统一重算姿态：inspection 点朝向目标标签，transit/Home 点沿最终相邻航段朝向。
 
-前端将任务建立和碰撞规划显示为连续的可观察阶段，包含运行秒数和最终成功/失败原因；任务列表每行提供计算/重新计算与永久删除入口。有效航线中所有通过 `targetLabelId` 绑定标签的点（包括标签起点）固定显示红色并使用 `hj_<标签名>`，算法插入的 transit 点固定显示蓝色，自由 Home 使用中性色，绿色折线表示已通过当前碰撞模型复检。失败任务只能用橙色绘制服务端返回的已复检安全前缀，不得补齐失败点或猜测后缀，并须明确显示“部分预览、禁止导出或执行”。
+前端将任务建立和碰撞规划显示为连续的可观察阶段，包含运行秒数和最终成功/失败原因；任务列表每行提供计算/重新计算与永久删除入口。有效航线中所有通过 `targetLabelId` 绑定标签的点（包括标签起点）固定显示红色并保留内部语义名 `hj_<标签名>`，但不绘制重复的 `hj_` 文字；算法插入的 transit 点固定显示蓝色，自由 Home 使用中性色，绿色折线表示已通过当前碰撞模型复检。巡检对象标签在两种 Renderer 中均为可点击注记，选中高亮与详情弹窗是会话级展示状态，不修改标签、碰撞或任务。失败任务只能用橙色绘制服务端返回的已复检安全前缀，不得补齐失败点或猜测后缀，并须明确显示“部分预览、禁止导出或执行”。
 
 体素网格外统一按未知且不可通行处理。碰撞查询还按半个体素对占用立方体做保守膨胀，避免把体素中心误当成零尺寸障碍点。
 

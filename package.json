@@ -16,6 +16,7 @@
     "dev": "concurrently -k -n server,web -c blue,green \"npm run dev -w @spikive/server\" \"npm run dev -w @spikive/web\"",
     "server": "npm run start -w @spikive/server",
     "build": "npm run build -w @spikive/shared && npm run build -w @spikive/web && npm run build -w @spikive/server",
+    "release:customer": "npm run verify && node scripts/build-customer-package.mjs",
     "test": "npm run test -w @spikive/shared && npm run test -w @spikive/server && npm run test -w @spikive/web",
     "typecheck": "npm run build -w @spikive/shared && npm run typecheck --workspaces --if-present",
     "verify": "npm run check:cesium-patch && npm run check:rendering-architecture && npm run typecheck && npm test && npm run build && npm audit --omit=dev",
@@ -23,7 +24,7 @@
     "clean": "npm run clean --workspaces --if-present"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.22.1"
   },
   "devDependencies": {
     "concurrently": "9.2.4",

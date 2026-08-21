@@ -9,17 +9,23 @@ export function placementMatrix(placement: Placement): number[] {
   return Matrix4.toArray(matrix);
 }
 
-export function transformTileset(tileset: Record<string, unknown>, placement: Placement, contentRevision?: string) {
+export function transformTileset(
+  tileset: Record<string, unknown>,
+  placement: Placement,
+  options: { contentRevision?: string; contentBaseUrl?: string } = {}
+) {
   const clone = structuredClone(tileset);
   const root = clone.root as Record<string, unknown> | undefined;
   if (!root) throw new Error("无效 tileset：缺少 root");
   root.transform = placementMatrix(placement);
   scaleGeometricError(clone, placement.scale);
-  if (contentRevision) versionContentUris(root, contentRevision);
+  if (options.contentRevision || options.contentBaseUrl) {
+    versionContentUris(root, options.contentRevision, options.contentBaseUrl);
+  }
   return clone;
 }
 
-function versionContentUris(value: unknown, revision: string) {
+function versionContentUris(value: unknown, revision?: string, contentBaseUrl?: string) {
   if (!value || typeof value !== "object") return;
   const object = value as Record<string, unknown>;
   for (const key of ["content", "contents"] as const) {
@@ -29,12 +35,17 @@ function versionContentUris(value: unknown, revision: string) {
       const content = entry as Record<string, unknown>;
       for (const uriKey of ["uri", "url"] as const) {
         if (typeof content[uriKey] !== "string" || content[uriKey].startsWith("data:")) continue;
-        const separator = content[uriKey].includes("?") ? "&" : "?";
-        content[uriKey] = `${content[uriKey]}${separator}revision=${encodeURIComponent(revision)}`;
+        const original = content[uriKey];
+        const pathOnly = original.split(/[?#]/, 1)[0] ?? original;
+        const based = contentBaseUrl ? `${contentBaseUrl.replace(/\/$/, "")}/${pathOnly.replace(/^\//, "")}` : original;
+        if (revision) {
+          const separator = based.includes("?") ? "&" : "?";
+          content[uriKey] = `${based}${separator}revision=${encodeURIComponent(revision)}`;
+        } else content[uriKey] = based;
       }
     }
   }
-  if (Array.isArray(object.children)) for (const child of object.children) versionContentUris(child, revision);
+  if (Array.isArray(object.children)) for (const child of object.children) versionContentUris(child, revision, contentBaseUrl);
 }
 
 function scaleGeometricError(value: unknown, scale: number) {

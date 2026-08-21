@@ -26,6 +26,9 @@ for (const forbidden of ["three", "@lumaai/luma-web", "@react-three/fiber"]) {
     failures.push(`前端不得声明第二渲染器依赖：${forbidden}`);
   }
 }
+if (declaredPackages["@manycore/aholo-viewer"] !== "1.8.1") {
+  failures.push("AHoLo 候选 Renderer 必须精确锁定 @manycore/aholo-viewer@1.8.1");
+}
 
 async function collectSourceFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -46,6 +49,19 @@ for (const file of await collectSourceFiles(path.join(webRoot, "src"))) {
   if (/\.getContext\(\s*["'](?:webgl2?|experimental-webgl)["']/.test(source)) {
     failures.push(`前端源码创建了额外 WebGL context：${path.relative(projectRoot, file)}`);
   }
+}
+
+const appSource = await readFile(path.join(webRoot, "src", "App.tsx"), "utf8");
+const mainSource = await readFile(path.join(webRoot, "src", "main.tsx"), "utf8");
+const labSource = await readFile(path.join(webRoot, "src", "RendererLabApp.tsx"), "utf8");
+if (!appSource.includes('dataset?.visualBackend === "aholo-chunk-lod"') || !appSource.includes(": <CesiumScene")) {
+  failures.push("生产场景缺少 AHoLo/Cesium 互斥挂载分支");
+}
+if (!mainSource.includes('window.location.pathname === "/renderer-lab"') || !mainSource.includes('import("./RendererLabApp")')) {
+  failures.push("renderer-lab 必须通过独立动态入口加载");
+}
+if (/\bimport\s+.*(?:CesiumScene|["']cesium["'])/.test(labSource)) {
+  failures.push("renderer-lab 不得引入或挂载 Cesium");
 }
 
 const primitivePath = path.join(
@@ -76,4 +92,4 @@ if (failures.length) {
   throw new Error(`Cesium GS 渲染架构检查失败：\n- ${failures.join("\n- ")}`);
 }
 
-console.log("Cesium GS 渲染架构检查通过：单一阶段 Shader 提交路径，无前端第二渲染器依赖或额外 WebGL context");
+console.log("GS 渲染架构检查通过：Cesium Shader 单路径，AHoLo/Cesium 后端互斥挂载，renderer-lab 独立加载");

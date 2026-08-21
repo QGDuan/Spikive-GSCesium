@@ -14,6 +14,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@manycore/aholo-viewer": "1.8.1",
     "@spikive/shared": "0.1.0",
     "cesium": "1.143.0",
     "react": "19.1.1",

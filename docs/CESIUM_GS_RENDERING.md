@@ -4,7 +4,7 @@
 
 ## 1. 最终决策
 
-保留“Cesium 原生基线 Shader + 仅初始化阶段使用的 Reveal Shader 变体”，不改成一个永久包含 Reveal 分支的常驻 Shader，也不引入 Luma、Three.js 或第二个 WebGL Renderer。
+对 Cesium 后端，保留“Cesium 原生基线 Shader + 仅初始化阶段使用的 Reveal Shader 变体”，不改成一个永久包含 Reveal 分支的常驻 Shader，也不在 Cesium 页面叠加第二个 WebGL Renderer。后续加入的 AHoLo 本地候选是互斥替代后端，不属于本文件讨论的 Cesium Shader 链；其约束见 [AHoLo Renderer 迁移与验收](AHOLO_RENDERER_MIGRATION.md)。
 
 这不是两套渲染系统。运行时拓扑始终是：
 
@@ -38,7 +38,7 @@ GaussianSplatVS
 |---|---|---|---|---|
 | 阶段性 Reveal 变体（当前） | Reveal 结束后回到原生路径，无 Reveal uniform、分支或距离计算 | 效果失败可立即退回基线 Shader | 维护一份差量和精确版本锚点 | **采用** |
 | 一个永久组合 Shader | 每个 Gaussian 顶点长期执行或携带 Reveal 分支和 9 个 uniform；驱动是否完全消除分支不可保证 | Reveal GLSL 错误会影响所有普通 GS 浏览 | 表面上少一次切换，实际扩大私有改动面 | 不采用 |
-| 第二个 Luma/Three/WebGL Renderer | 双上下文、双相机、双排序、双显存/内存数据及合成成本 | 两套生命周期和透明排序容易失配 | 依赖和调试面最大 | 禁止 |
+| 与 Cesium 同时叠加第二个 Luma/Three/WebGL Renderer | 双上下文、双相机、双排序、双显存/内存数据及合成成本 | 两套生命周期和透明排序容易失配 | 依赖和调试面最大 | 禁止 |
 | Cesium 官方公共 GS Reveal/Custom Shader 扩展 | 取决于官方实现 | 最佳 | 最佳 | 官方能力成熟后迁移 |
 
 阶段性变体只付出每个数据集初始化时至多一次 Reveal Program 编译/获取和一次回到基线 DrawCommand 的重建。对大场景而言，普通浏览持续数分钟或数小时，避免永久的逐 Gaussian 运算比省掉一次阶段切换更重要。
@@ -93,7 +93,7 @@ GaussianSplatVS
 ## 8. 发布与升级检查
 
 - `npm run check:cesium-patch` 必须通过，且生产/开发使用同一补丁版本。
-- `npm run check:rendering-architecture` 必须通过；它拒绝前端第二渲染器依赖、额外 WebGL context，以及同时提交基线/Reveal Shader 的结构漂移。
+- `npm run check:rendering-architecture` 必须通过；它拒绝 Cesium/AHoLo 同时挂载、renderer-lab 引入 Cesium、额外手写 WebGL context，以及同时提交基线/Reveal Shader 的结构漂移。
 - 补丁版本必须同时驱动控制器能力判断和 Vite 依赖优化缓存目录；不得让就地补丁后的 Cesium 源码与旧的预打包 Bundle 混用。
 - 前端依赖树不得加入 Luma/Three 渲染器；服务端转换工具的传递依赖不进入 WebGL 运行时。
 - 用代表性 GS 验证 Reveal 开始、完成、中止和场景切换，确认每帧只有一个 GS DrawCommand 路径。

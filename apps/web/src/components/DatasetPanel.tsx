@@ -12,11 +12,13 @@ interface DatasetPanelProps {
   onClearView(): void;
   onRetry(id: string, voxelSize: number): Promise<void>;
   onRebuild(id: string): Promise<void>;
+  onBuildAholo(id: string): Promise<void>;
+  onSwitchRenderer(id: string, backend: Dataset["visualBackend"]): Promise<void>;
   onDelete(id: string): void;
   onMessage(value: string): void;
 }
 
-export function DatasetPanel({ datasets, selectedId, onSelect, onFocus, onCreated, onClearView, onRetry, onRebuild, onDelete, onMessage }: DatasetPanelProps) {
+export function DatasetPanel({ datasets, selectedId, onSelect, onFocus, onCreated, onClearView, onRetry, onRebuild, onBuildAholo, onSwitchRenderer, onDelete, onMessage }: DatasetPanelProps) {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [retryingId, setRetryingId] = useState<string | null>(null);
@@ -148,6 +150,27 @@ export function DatasetPanel({ datasets, selectedId, onSelect, onFocus, onCreate
             .finally(() => setRebuildingId(null));
         }}
       >{rebuildingId === selectedId ? "已排队…" : "重建高清切片"}</button>
+      <button
+        type="button"
+        className="secondary"
+        disabled={selectedDataset?.status !== "ready" || rebuildingId === selectedId}
+        onClick={() => {
+          if (!selectedId) return;
+          setRebuildingId(selectedId);
+          void onBuildAholo(selectedId)
+            .catch(error => onMessage(`AHoLo 候选构建失败：${errorMessage(error)}`))
+            .finally(() => setRebuildingId(null));
+        }}
+      >构建 AHoLo 候选</button>
+      <button
+        type="button"
+        className="secondary"
+        disabled={!selectedDataset || selectedDataset.status !== "ready" || (!selectedDataset.aholoVisualRevision && selectedDataset.visualBackend === "cesium-3dtiles")}
+        onClick={() => selectedDataset && void onSwitchRenderer(
+          selectedDataset.id,
+          selectedDataset.visualBackend === "cesium-3dtiles" ? "aholo-chunk-lod" : "cesium-3dtiles"
+        ).catch(error => onMessage(`Renderer 切换失败：${errorMessage(error)}`))}
+      >{selectedDataset?.visualBackend === "aholo-chunk-lod" ? "回滚 Cesium" : "启用 AHoLo"}</button>
       <button type="button" className="danger" disabled={!selectedId || uploading} onClick={() => selectedId && onDelete(selectedId)}>永久删除所选模型</button>
     </div>
   </>;
