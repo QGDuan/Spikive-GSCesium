@@ -2,7 +2,7 @@
 
 自托管的 React Gaussian Splatting 巡检平台：上传 GraphDECO PLY，生成 Cesium Gaussian 3D Tiles、候选 AHoLo Chunk LOD 与独立碰撞 SVO，手动拾取场景标签，并由标签和碰撞约束生成无人机候选航迹。
 
-> 客户测试请优先使用 GitHub Release 中的 `Spikive-GS-Inspector-*-customer.zip`，按照包内《使用说明》安装。项目经理可直接在使用说明预留位置补充操作截图。
+> 客户测试请按电脑使用 GitHub Release 中的 `macos-apple-silicon.zip` 或 `windows-x64.zip`，按照包内《使用说明》安装。项目经理可直接在使用说明预留位置补充操作截图。
 
 ## 客户使用
 
@@ -26,13 +26,16 @@ npm run verify
 npm run audit:data
 ```
 
-构建客户测试包：
+构建 Apple Silicon Mac 和 Windows x64 客户测试包：
 
 ```bash
-RELEASE_VERSION=v0.1.0-beta.1 npm run release:customer
+RELEASE_VERSION=v0.1.0-beta.2 RELEASE_TARGET=macos-arm64 npm run release:customer
+RELEASE_VERSION=v0.1.0-beta.2 RELEASE_TARGET=windows-x64 node scripts/build-customer-package.mjs
 ```
 
 输出位于 `release/`，该目录仅保存本地发布产物并被 Git 忽略。
+
+完整支持目标为 Apple Silicon Mac 和 Windows x64。Intel Mac 缺少当前 AHoLo 固定版本的原生转换依赖，只保留 Cesium 能力，不列入完整交付范围；Windows ARM64 尚未验收。
 
 大场景可通过 `COLLISION_CACHE_BYTES` 设置服务端已发布 SVO 的 LRU 字节预算，默认 512 MiB；它不改变碰撞构建精度。
 

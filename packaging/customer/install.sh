@@ -3,6 +3,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
+  echo "本安装包仅支持 Apple Silicon Mac（M1 或更新芯片）。"
+  exit 1
+fi
+
 if ! command -v node >/dev/null 2>&1; then
   echo "未找到 Node.js，请先安装 Node.js 22.22.1 或更高版本。"
   exit 1

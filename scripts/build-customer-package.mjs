@@ -10,7 +10,32 @@ if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(releaseVersion)) {
   throw new Error("RELEASE_VERSION 必须类似 v0.1.0-beta.1");
 }
 
-const packageName = `Spikive-GS-Inspector-${releaseVersion}-customer`;
+const releaseTarget = process.env.RELEASE_TARGET;
+const targetConfigs = {
+  "macos-arm64": {
+    suffix: "macos-apple-silicon",
+    readme: "packaging/customer/README.macos.md",
+    launchers: [
+      ["packaging/customer/install.sh", "install.sh"],
+      ["packaging/customer/start.sh", "start.sh"]
+    ]
+  },
+  "windows-x64": {
+    suffix: "windows-x64",
+    readme: "packaging/customer/README.windows.md",
+    launchers: [
+      ["packaging/customer/install.cmd", "install.cmd"],
+      ["packaging/customer/start.cmd", "start.cmd"]
+    ]
+  }
+};
+const targetConfig = targetConfigs[releaseTarget];
+if (!targetConfig) {
+  throw new Error(`RELEASE_TARGET 必须是以下值之一：${Object.keys(targetConfigs).join("、")}`);
+}
+
+const directoryOnly = process.env.CUSTOMER_PACKAGE_DIRECTORY_ONLY === "true";
+const packageName = `Spikive-GS-Inspector-${releaseVersion}-${targetConfig.suffix}`;
 const releaseDir = path.join(projectRoot, "release");
 const stageRoot = path.join(releaseDir, ".customer-package-stage");
 const packageRoot = path.join(stageRoot, packageName);
@@ -45,11 +70,8 @@ const copyEntries = [
   ["patches", "patches"],
   ["docs/CUSTOMER_GUIDE.md", "USER_GUIDE.md"],
   ["docs/THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"],
-  ["packaging/customer/README.md", "README.md"],
-  ["packaging/customer/install.sh", "install.sh"],
-  ["packaging/customer/start.sh", "start.sh"],
-  ["packaging/customer/install.cmd", "install.cmd"],
-  ["packaging/customer/start.cmd", "start.cmd"]
+  [targetConfig.readme, "README.md"],
+  ...targetConfig.launchers
 ];
 
 for (const [source, destination] of copyEntries) {
@@ -69,8 +91,10 @@ await removeCompiledTests(path.join(packageRoot, "apps", "server", "dist"));
 await removeCompiledTests(path.join(packageRoot, "packages", "shared", "dist"));
 await mkdir(path.join(packageRoot, "var"), { recursive: true });
 await writeFile(path.join(packageRoot, "var", ".gitkeep"), "");
-await chmod(path.join(packageRoot, "install.sh"), 0o755);
-await chmod(path.join(packageRoot, "start.sh"), 0o755);
+if (releaseTarget === "macos-arm64") {
+  await chmod(path.join(packageRoot, "install.sh"), 0o755);
+  await chmod(path.join(packageRoot, "start.sh"), 0o755);
+}
 
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: projectRoot, encoding: "utf8" }).trim();
 await writeFile(path.join(packageRoot, "release-manifest.json"), `${JSON.stringify({
@@ -78,7 +102,8 @@ await writeFile(path.join(packageRoot, "release-manifest.json"), `${JSON.stringi
   product: "Spikive GS Inspector",
   version: releaseVersion,
   commit,
-  packageType: "universal-online-installer",
+  packageType: "platform-online-installer",
+  target: releaseTarget,
   nodeRequirement: ">=22.22.1",
   includesBusinessData: false,
   builtAt: new Date().toISOString()
@@ -94,6 +119,11 @@ async function assertCleanPackage(directory) {
   }
 }
 await assertCleanPackage(packageRoot);
+
+if (directoryOnly) {
+  console.log(`客户测试包目录：${packageRoot}`);
+  process.exit(0);
+}
 
 execFileSync("/usr/bin/zip", ["-X", "-q", "-r", archivePath, packageName], { cwd: stageRoot, stdio: "inherit" });
 const checksum = createHash("sha256").update(await readFile(archivePath)).digest("hex");

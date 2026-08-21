@@ -11,7 +11,7 @@ where npm >nul 2>nul || (
   exit /b 1
 )
 
-node -e "const [a,b,c]=process.versions.node.split('.').map(Number);if(a<22||(a===22&&(b<22||(b===22&&c<1)))){console.error('Node.js 22.22.1 or later is required. Current: '+process.versions.node);process.exit(1)}" || exit /b 1
+node -e "if(process.arch!=='x64'){console.error('This package requires Windows x64 Node.js. Current architecture: '+process.arch);process.exit(1)};const [a,b,c]=process.versions.node.split('.').map(Number);if(a<22||(a===22&&(b<22||(b===22&&c<1)))){console.error('Node.js 22.22.1 or later is required. Current: '+process.versions.node);process.exit(1)}" || exit /b 1
 
 echo Installing runtime dependencies...
 call npm ci --omit=dev --workspace @spikive/server --workspace @spikive/shared --include-workspace-root || exit /b 1

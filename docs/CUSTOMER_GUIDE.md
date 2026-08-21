@@ -8,11 +8,24 @@
 
 ### 1.1 电脑与软件
 
-- 64 位 Windows 10/11、macOS 或主流 Linux。
+- 请按电脑下载对应安装包：
+  - Apple Silicon Mac（M1/M2/M3/M4/M5）：`Spikive-GS-Inspector-*-macos-apple-silicon.zip`；
+  - 64 位 Windows 10/11：`Spikive-GS-Inspector-*-windows-x64.zip`。
 - Node.js `22.22.1` 或更高版本，推荐 Node.js 24 LTS，并自带 npm。
 - 推荐使用最新版 Chrome 或 Edge 浏览器。
 - 显卡驱动保持最新，且系统能够正常使用 WebGL2。大规模 GS 切片建议使用独立显卡或 Apple Silicon。
 - 首次安装需要联网下载依赖；底图显示也需要网络。模型、标签和航线数据保存在本机。
+
+本测试版的平台范围如下：
+
+| 平台 | 本版状态 | 说明 |
+|---|---|---|
+| Apple Silicon Mac | 客户测试 | 提供 arm64 安装包，本版未做独立客户机器验收 |
+| Windows 10/11 x64 | 客户测试 | 提供 x64 安装包，本版未做独立客户机器验收 |
+| Intel Mac | 有限 | Cesium 路径可运行，但当前 AHoLo 原生转换依赖不提供 darwin-x64，不作为完整支持平台 |
+| Windows ARM64 | 未验收 | 当前版本不提供该平台客户包 |
+
+首次测试建议先使用非生产数据；若遇到显卡、驱动或转换工具兼容问题，请保留完整日志反馈给项目人员。
 
 在终端中执行以下命令，能显示版本号即表示 Node.js 安装成功：
 
@@ -60,11 +73,11 @@ start.cmd
 
 ### 2.1 解压与安装
 
-1. 解压 `Spikive-GS-Inspector-*-customer.zip`。
+1. 解压与电脑对应的 `macos-apple-silicon.zip` 或 `windows-x64.zip`。
 2. 进入解压后的文件夹。
 3. 根据操作系统执行安装脚本。
 
-macOS / Linux：
+Apple Silicon Mac：
 
 ```bash
 chmod +x install.sh start.sh
@@ -81,7 +94,7 @@ install.cmd
 
 ### 2.2 启动系统
 
-macOS / Linux：
+Apple Silicon Mac：
 
 ```bash
 ./start.sh
