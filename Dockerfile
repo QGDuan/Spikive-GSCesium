@@ -4,7 +4,6 @@ COPY package.json package-lock.json tsconfig.base.json ./
 COPY apps ./apps
 COPY packages ./packages
 COPY scripts ./scripts
-COPY patches ./patches
 RUN npm ci
 RUN npm run build
 RUN npm prune --omit=dev

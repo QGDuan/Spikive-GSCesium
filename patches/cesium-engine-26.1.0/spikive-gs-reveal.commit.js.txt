@@ -1,6 +1,0 @@
-  retireSpikiveGaussianDrawResources(
-    primitive,
-    frameNumber,
-    primitive._drawCommand,
-    primitive._vertexArray,
-  );

@@ -1,11 +1,30 @@
-# 第三方算法参考说明
+# 第三方组件与许可说明
 
-## Luma WebGL Library
+本文件列出当前 AHoLo-only 主线中与 GS 显示和碰撞处理直接相关的核心第三方组件。完整传递依赖以 `package-lock.json` 和各安装包随附许可为准。
 
-- 官方示例：[`lumalabs/luma-web-examples`](https://github.com/lumalabs/luma-web-examples)
-- npm 包：[`@lumaai/luma-web`](https://www.npmjs.com/package/@lumaai/luma-web)
-- 审计版本：`@lumaai/luma-web@0.2.2`
-- 许可：MIT（以其仓库随附 `LICENSE` 为准）
-- 使用方式：研究公开的 `particleRevealEnabled` 配置，并审计该版本发布包中的 Reveal/Solid/Alpha Shader 行为；本项目没有安装、复制运行或嵌入 Luma 的 Three/WebGL 渲染器。
+## AHoLo Viewer
 
-本项目在 Cesium Gaussian Primitive 的坐标、协方差和生命周期模型中独立实现种子尺寸到完整椭球的插值。实现代码受本项目自己的 Cesium 精确版本保护、自动化测试和退出恢复约束。
+- 包：`@manycore/aholo-viewer@1.8.1`
+- 仓库：<https://github.com/manycoretech/aholo-viewer>
+- 许可：MIT
+- 用途：浏览器端 WebGL2 Gaussian、Chunk LOD、相机、点线和 Sprite 渲染。
+
+## AHoLo Splat Transform
+
+- 包：`@manycore/aholo-splat-transform@1.7.4`
+- 仓库：<https://github.com/manycoretech/aholo-viewer>
+- 许可：MIT
+- 用途：服务端把 GraphDECO PLY 分块为无损 PLY Chunk，并转换为高精度 ESZ v2。
+- 该包包含平台相关的可选原生依赖；当前客户交付目标为 macOS arm64 与 Windows x64。
+
+## PlayCanvas Splat Transform
+
+- 包：`@playcanvas/splat-transform@3.1.6`
+- 仓库：<https://github.com/playcanvas/splat-transform>
+- 许可：MIT
+- 用途：服务端生成 SVO 和 collision GLB，供标签表面解析和航迹碰撞计算使用。
+- 它不作为浏览器 Renderer，不进入 AHoLo 前端绘制链。
+
+## 已退役参考
+
+旧 Cesium/Reveal/Luma 研究代码不属于当前 `main` 的运行时或构建依赖。其历史实现只保存在冻结标签 `v0.1.0-cesium-final`，详见 [Cesium 归档说明](CESIUM_ARCHIVE.md)。

@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Dataset, InspectionLabel, Mission, Waypoint } from "@spikive/shared";
 import { Database } from "./db.js";
@@ -33,15 +34,52 @@ describe("database persistence", () => {
     }
   });
 
+  it("adds new fields without guessing a legacy dataset coordinate system or dropping old visual columns", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "spikive-db-aholo-migration-"));
+    directories.push(directory);
+    const filename = path.join(directory, "test.sqlite");
+    const legacy = new DatabaseSync(filename);
+    const now = new Date().toISOString();
+    const datasetId = randomUUID();
+    legacy.exec(`
+      CREATE TABLE datasets (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, source_file_name TEXT NOT NULL,
+        source_size INTEGER NOT NULL, scene_type TEXT NOT NULL, input_convention TEXT NOT NULL,
+        voxel_size REAL NOT NULL, voxel_opacity REAL NOT NULL, indoor_seed TEXT,
+        placement TEXT NOT NULL, status TEXT NOT NULL, collision_status TEXT NOT NULL,
+        progress INTEGER NOT NULL, stage TEXT NOT NULL, error TEXT, upload_id TEXT,
+        active_visual_revision TEXT, lod_policy_version TEXT,
+        aholo_visual_revision TEXT, aholo_policy_version TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+    `);
+    legacy.prepare(`
+      INSERT INTO datasets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      datasetId, "legacy-aholo", "legacy.ply", 1, "outdoor", "graphdeco",
+      0.1, 0.1, null, JSON.stringify({ longitude: 0, latitude: 0, height: 0, heading: 0, pitch: 0, roll: 0, scale: 1 }),
+      "ready", "ready", 100, "ready", null, null, "cesium-revision", "legacy-v2", "aholo-revision", "aholo-chunk-lod-v1", now, now
+    );
+    legacy.close();
+
+    const migrated = new Database(filename);
+    try {
+      expect(migrated.getDataset(datasetId)?.sourceCoordinateSystem).toBeNull();
+      const columns = migrated.sqlite.prepare("PRAGMA table_info(datasets)").all() as Array<{ name: string }>;
+      expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
+        "source_coordinate_system", "active_visual_revision", "lod_policy_version"
+      ]));
+    } finally { migrated.close(); }
+  });
+
   it("round-trips datasets, labels, missions and all waypoint fields", () => {
     const db = createDatabase(); const now = new Date().toISOString(); const datasetId = randomUUID();
     const dataset: Dataset = {
       id: datasetId, name: "test", sourceFileName: "test.ply", sourceSize: 1, sceneType: "outdoor",
-      inputConvention: "graphdeco", voxelSize: 0.1, voxelOpacity: 0.1, indoorSeed: null,
+      inputConvention: "graphdeco", sourceCoordinateSystem: "z_up", voxelSize: 0.1, voxelOpacity: 0.1, indoorSeed: null,
       placement: { longitude: 0, latitude: 0, height: 0, heading: 0, pitch: 0, roll: 0, scale: 1 },
       status: "ready", collisionStatus: "ready", progress: 100, stage: "ready", error: null,
-      uploadId: null, visualBackend: "cesium-3dtiles", activeVisualRevision: null, lodPolicyVersion: null,
-      aholoVisualRevision: null, aholoPolicyVersion: null, visualBuildTarget: null, createdAt: now, updatedAt: now
+      uploadId: null, aholoVisualRevision: null, aholoPolicyVersion: null, createdAt: now, updatedAt: now
     };
     db.insertDataset(dataset);
 
@@ -77,11 +115,10 @@ describe("database persistence", () => {
     const db = createDatabase(); const now = new Date().toISOString(); const datasetId = randomUUID();
     db.insertDataset({
       id: datasetId, name: "delete-me", sourceFileName: "delete-me.ply", sourceSize: 1, sceneType: "outdoor",
-      inputConvention: "graphdeco", voxelSize: 0.1, voxelOpacity: 0.1, indoorSeed: null,
+      inputConvention: "graphdeco", sourceCoordinateSystem: "z_up", voxelSize: 0.1, voxelOpacity: 0.1, indoorSeed: null,
       placement: { longitude: 0, latitude: 0, height: 0, heading: 0, pitch: 0, roll: 0, scale: 1 },
       status: "ready", collisionStatus: "ready", progress: 100, stage: "ready", error: null,
-      uploadId: null, visualBackend: "cesium-3dtiles", activeVisualRevision: null, lodPolicyVersion: null,
-      aholoVisualRevision: null, aholoPolicyVersion: null, visualBuildTarget: null, createdAt: now, updatedAt: now
+      uploadId: null, aholoVisualRevision: null, aholoPolicyVersion: null, createdAt: now, updatedAt: now
     });
     const labelId = randomUUID();
     db.insertLabel({ id: labelId, datasetId, title: "label", description: "", category: "inspection", color: "#fff", positionLocal: { x: 0, y: 0, z: 0 }, surfaceNormalLocal: null, snapDistance: null, resolutionStatus: "pending", createdAt: now, updatedAt: now });
@@ -109,11 +146,10 @@ describe("database persistence", () => {
     const db = new Database(filename); const now = new Date().toISOString(); const datasetId = randomUUID(); const missionId = randomUUID();
     db.insertDataset({
       id: datasetId, name: "legacy", sourceFileName: "legacy.ply", sourceSize: 1, sceneType: "outdoor",
-      inputConvention: "graphdeco", voxelSize: 0.1, voxelOpacity: 0.1, indoorSeed: null,
+      inputConvention: "graphdeco", sourceCoordinateSystem: "z_up", voxelSize: 0.1, voxelOpacity: 0.1, indoorSeed: null,
       placement: { longitude: 0, latitude: 0, height: 0, heading: 0, pitch: 0, roll: 0, scale: 1 },
       status: "ready", collisionStatus: "ready", progress: 100, stage: "ready", error: null,
-      uploadId: null, visualBackend: "cesium-3dtiles", activeVisualRevision: null, lodPolicyVersion: null,
-      aholoVisualRevision: null, aholoPolicyVersion: null, visualBuildTarget: null, createdAt: now, updatedAt: now
+      uploadId: null, aholoVisualRevision: null, aholoPolicyVersion: null, createdAt: now, updatedAt: now
     });
     db.insertMission({
       id: missionId, datasetId, name: "legacy route", homeLocal: { x: 0, y: 0, z: 1 }, startLabelId: null, labelIds: [],

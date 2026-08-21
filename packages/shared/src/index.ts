@@ -13,10 +13,9 @@ export const placementSchema = geoPointSchema.extend({
 export const datasetStatusSchema = z.enum(["created", "uploading", "queued", "tiling", "collision_processing", "rebuilding", "ready", "failed"]);
 export const collisionStatusSchema = z.enum(["pending", "processing", "ready", "failed"]);
 export const sceneTypeSchema = z.enum(["outdoor", "indoor"]);
-export const visualBackendSchema = z.enum(["cesium-3dtiles", "aholo-chunk-lod"]);
-export const visualBuildTargetSchema = z.enum(["cesium-3dtiles", "aholo-chunk-lod"]);
 // Collision generation currently consumes GraphDECO's log-scale/logit-opacity PLY convention.
 export const inputConventionSchema = z.literal("graphdeco");
+export const sourceCoordinateSystemSchema = z.literal("z_up");
 
 export const createDatasetSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -24,6 +23,7 @@ export const createDatasetSchema = z.object({
   sourceSize: z.number().int().positive().max(5 * 1024 ** 3),
   sceneType: sceneTypeSchema.default("outdoor"),
   inputConvention: inputConventionSchema.default("graphdeco"),
+  sourceCoordinateSystem: sourceCoordinateSystemSchema,
   voxelSize: z.number().min(0.02).max(2).default(0.1),
   voxelOpacity: z.number().min(0.001).max(1).default(0.1),
   indoorSeed: vec3Schema.nullable().optional(),
@@ -108,15 +108,12 @@ export type FlightProfile = z.infer<typeof flightProfileSchema>;
 export type CreateMission = z.infer<typeof createMissionSchema>;
 export type Waypoint = z.infer<typeof waypointSchema>;
 
-export interface Dataset extends CreateDataset {
+export interface Dataset extends Omit<CreateDataset, "sourceCoordinateSystem"> {
   id: string;
-  /** Production renderer. AHoLo candidates do not change this until explicitly activated. */
-  visualBackend: z.infer<typeof visualBackendSchema>;
-  activeVisualRevision: string | null;
-  lodPolicyVersion: string | null;
+  /** Null only for legacy records whose source basis has not yet been audited. */
+  sourceCoordinateSystem: z.infer<typeof sourceCoordinateSystemSchema> | null;
   aholoVisualRevision: string | null;
   aholoPolicyVersion: string | null;
-  visualBuildTarget: z.infer<typeof visualBuildTargetSchema> | null;
   status: z.infer<typeof datasetStatusSchema>;
   collisionStatus: z.infer<typeof collisionStatusSchema>;
   progress: number;
@@ -169,14 +166,12 @@ export interface AholoVisualReport {
 export interface RenderManifest {
   schemaVersion: 1;
   datasetId: string;
-  renderer: z.infer<typeof visualBackendSchema>;
   activeVisualRevision: string;
   source: { sha256: string; splatCount: number; shDegree: number };
   coordinateFrame: "tile_local_z_up";
   collisionRevision: string;
   placement: Placement;
-  cesium?: { tilesetUrl: string; policyVersion: string };
-  aholo?: {
+  aholo: {
     lodMetaUrl: string;
     referenceLodMetaUrl: string;
     reportUrl: string;
@@ -185,55 +180,6 @@ export interface RenderManifest {
     levels: AholoLodLevelReport[];
     transform: { localToRender: "render=(x,z,-y)"; renderToLocal: "local=(x,-z,y)" };
   };
-}
-
-export interface LodLevelReport {
-  depth: number;
-  tileCount: number;
-  splatCount: number;
-  bytes: number;
-  geometricError: { min: number; max: number; average: number };
-}
-
-export interface LodReport {
-  schemaVersion: 1;
-  datasetId: string;
-  visualRevision: string;
-  policyVersion: string;
-  source: {
-    sha256: string;
-    bytes: number;
-    inputSplats: number;
-    convertedSplats: number;
-    removedInvalidSplats: number;
-    removedOpacitySplats: number;
-    opacityFilter: number;
-    coordinateSystem: string;
-    shDegree: number;
-  };
-  tiler: { name: string; version: string; parameters: Record<string, string | number | boolean> };
-  artifact: {
-    payloadSha256: string;
-    bytes: number;
-    logicalLevels: number;
-    physicalLevels: number;
-    rootBoundingVolume: number[];
-  };
-  collisionRevision: string;
-  scaleAudit: {
-    encoding: "graphdeco_log_scale" | "unavailable";
-    above1m: number;
-    above2m: number;
-    above5m: number;
-  };
-  coverage: {
-    complete: boolean;
-    terminalSplatCount: number;
-    terminalTileCount: number;
-    levelSplatCountsMonotonic: boolean;
-  };
-  levels: LodLevelReport[];
-  builtAt: string;
 }
 
 export interface InspectionLabel extends CreateLabel {

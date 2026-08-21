@@ -272,8 +272,15 @@ export class CollisionRepository {
     this.generations.set(datasetId, (this.generations.get(datasetId) ?? 0) + 1);
   }
   private async load(datasetId: string) {
+    const jsonPath = path.join(this.publishedDir, datasetId, "collision", "scene.voxel.json");
+    const metadata = JSON.parse(await readFile(jsonPath, "utf8")) as Pick<VoxelMetadata, "coordinateFrame">;
+    if (metadata.coordinateFrame === "tile_local_z_up") return VoxelCollisionWorld.load(jsonPath);
+
+    // Frozen releases wrote collision data before coordinateFrame was embedded
+    // in the voxel metadata. Keep that read-only compatibility path, but never
+    // make a new AHoLo dataset depend on the retired visual artifact directory.
     const summary = JSON.parse(await readFile(path.join(this.publishedDir, datasetId, "tiles", "build_summary.json"), "utf8")) as { source_coordinate_system?: string };
-    return VoxelCollisionWorld.load(path.join(this.publishedDir, datasetId, "collision", "scene.voxel.json"), summary.source_coordinate_system);
+    return VoxelCollisionWorld.load(jsonPath, summary.source_coordinate_system);
   }
   private trim() {
     while (this.cacheBytes > this.maximumCacheBytes && this.cache.size > 1) {

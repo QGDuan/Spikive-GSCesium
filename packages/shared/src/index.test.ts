@@ -11,9 +11,19 @@ describe("shared contracts", () => {
   it("rejects oversized datasets", () => {
     const result = createDatasetSchema.safeParse({
       name: "x", sourceFileName: "x.ply", sourceSize: 6 * 1024 ** 3,
+      sourceCoordinateSystem: "z_up",
       placement: { longitude: 0, latitude: 0, height: 0 }
     });
     expect(result.success).toBe(false);
+  });
+  it("requires an explicit local z-up source coordinate system", () => {
+    const base = {
+      name: "x", sourceFileName: "x.ply", sourceSize: 1024,
+      placement: { longitude: 0, latitude: 0, height: 0 }
+    };
+    expect(createDatasetSchema.safeParse(base).success).toBe(false);
+    expect(createDatasetSchema.safeParse({ ...base, sourceCoordinateSystem: "y_up" }).success).toBe(false);
+    expect(createDatasetSchema.safeParse({ ...base, sourceCoordinateSystem: "z_up" }).success).toBe(true);
   });
   it("rejects duplicate labels in one mission", () => {
     const labelId = randomUUID();

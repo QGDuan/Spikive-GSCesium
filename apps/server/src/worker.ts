@@ -9,31 +9,13 @@ import { Database } from "./db.js";
 import { config } from "./config.js";
 import { CollisionRepository } from "./collision.js";
 import {
-  GS_LOD_POLICY_VERSION, buildLodReport, prepareInitialVisualLayout, publishVisualRevision,
-  resolveActiveVisual, visualRecordFromReport, writeArtifactManifestAtomic, writeLodReport
-} from "./visual-artifacts.js";
-import {
   AHOLO_POLICY_VERSION, createAholoEszConversionPipeline, createAholoPipeline, prepareAholoEszMeta,
   publishAholoRevision, validateAholoRevision, writeAholoReport
 } from "./aholo-artifacts.js";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../node_modules");
-const tilerCli = path.join(packageRoot, "3dgs-ply-3dtiles-converter/bin/3dgs-ply-3dtiles-converter.js");
 const splatCli = path.join(packageRoot, "@playcanvas/splat-transform/bin/cli.mjs");
 const aholoSplatCli = path.join(packageRoot, "@manycore/aholo-splat-transform/bin/cli.js");
-
-/** Fixed high-definition policy. Depth remains count-adaptive instead of forcing a global layer count. */
-export const GS_LOD_POLICY = Object.freeze({
-  maxLeafSplats: 25_000,
-  minLeafSplats: 2_500,
-  samplingRatePerLevel: 0.65,
-  lodMultiplier: "max",
-  coverageBoostScale: 0.6,
-  opacityFilter: 0.02,
-  geometricErrorLayerMultiplier: 1.35,
-  geometricErrorScale: 2.5,
-  boundsMode: "aabb"
-} as const);
 
 /** Guidance is advisory only: collision fidelity parameters are never changed without an operator retry. */
 export const COLLISION_VOXEL_GUIDANCE = Object.freeze({
@@ -72,25 +54,6 @@ export function recommendedCollisionVoxelSize(error: unknown, currentVoxelSize: 
     * COLLISION_VOXEL_GUIDANCE.resolutionStep;
   if (next <= currentVoxelSize || next > COLLISION_VOXEL_GUIDANCE.maximumVoxelSize) return null;
   return Number(next.toFixed(3));
-}
-
-export function calculateGsLodDepth(effectiveSplatCount: number) {
-  if (!Number.isFinite(effectiveSplatCount) || effectiveSplatCount <= GS_LOD_POLICY.maxLeafSplats) return 0;
-  return Math.ceil(Math.log(GS_LOD_POLICY.maxLeafSplats / effectiveSplatCount) / Math.log(GS_LOD_POLICY.samplingRatePerLevel));
-}
-
-export function fixedGsTilerArguments() {
-  return [
-    "--max-leaf-limit", String(GS_LOD_POLICY.maxLeafSplats),
-    "--min-leaf-limit", String(GS_LOD_POLICY.minLeafSplats),
-    "--sampling-rate-per-level", String(GS_LOD_POLICY.samplingRatePerLevel),
-    "--lod-multiplier", GS_LOD_POLICY.lodMultiplier,
-    "--coverage-boost-scale", String(GS_LOD_POLICY.coverageBoostScale),
-    "--opacity-filter", String(GS_LOD_POLICY.opacityFilter),
-    "--geometric-error-layer-multiplier", String(GS_LOD_POLICY.geometricErrorLayerMultiplier),
-    "--geometric-error-scale", String(GS_LOD_POLICY.geometricErrorScale),
-    `--${GS_LOD_POLICY.boundsMode}`
-  ];
 }
 
 export class ProcessingWorker {
@@ -153,10 +116,9 @@ export class ProcessingWorker {
       if (dataset.status === "rebuilding") {
         this.db.updateDataset(dataset.id, {
           status: "ready", progress: 100,
-          stage: dataset.visualBuildTarget === "aholo-chunk-lod"
-            ? "AHoLo 候选视觉构建失败，继续使用当前生产 Renderer"
-            : "高清 LOD 重建失败，继续使用上一已发布版本",
-          visualBuildTarget: null,
+          stage: dataset.aholoVisualRevision
+            ? "AHoLo 视觉重建失败，继续使用上一已发布版本"
+            : "AHoLo 视觉构建失败；碰撞、标签和航迹保持不变",
           error: message.slice(0, 4000)
         });
       } else {
@@ -170,74 +132,117 @@ export class ProcessingWorker {
 
   private async process(dataset: Dataset, signal: AbortSignal) {
     signal.throwIfAborted();
-    if (dataset.status === "rebuilding" && dataset.visualBuildTarget === "aholo-chunk-lod") {
+    if (dataset.sourceCoordinateSystem !== "z_up") {
+      throw new Error("AHoLo-only 主线只接受已明确声明为 z_up 的 GraphDECO PLY；旧数据请先完成坐标审计");
+    }
+    if (dataset.status === "rebuilding") {
       await this.processAholoVisual(dataset, signal);
       return;
     }
-    const visualOnlyRebuild = dataset.status === "rebuilding";
     const source = path.join(config.sourcesDir, `${dataset.id}.ply`);
     await validatePly(source);
     const root = path.join(config.workDir, dataset.id);
     const output = path.join(root, "output");
-    const tiles = path.join(output, "tiles");
     const collision = path.join(output, "collision");
     const destination = path.join(config.publishedDir, dataset.id);
     const previousPublished = path.join(root, "previous-published");
     await recoverInterruptedPublication(destination, previousPublished);
-    let buildSummary = await reusableGsTilesSummary(tiles);
-    if (buildSummary) {
-      await rm(collision, { recursive: true, force: true });
-      if (!visualOnlyRebuild) await mkdir(collision, { recursive: true });
+    if (await hasValidCollisionArtifacts(collision)) {
       this.db.updateDataset(dataset.id, {
-        status: visualOnlyRebuild ? "rebuilding" : "tiling", progress: 55,
-        stage: visualOnlyRebuild ? "复用已验收的高清 Gaussian 3D Tiles" : "复用已验收的 Gaussian 3D Tiles", error: null
+        status: "collision_processing", collisionStatus: "processing", progress: 55,
+        stage: "复用已完成的体素碰撞数据", error: null
       });
     } else {
-      await rm(output, { recursive: true, force: true });
-      await mkdir(tiles, { recursive: true });
-      if (!visualOnlyRebuild) await mkdir(collision, { recursive: true });
+      await rm(collision, { recursive: true, force: true });
+      await mkdir(collision, { recursive: true });
       this.db.updateDataset(dataset.id, {
-        status: visualOnlyRebuild ? "rebuilding" : "tiling", progress: 15,
-        stage: visualOnlyRebuild ? "生成高清 Gaussian 3D Tiles（旧版本继续服务）" : "生成 Gaussian 3D Tiles", error: null
+        status: "collision_processing", collisionStatus: "processing", progress: 15,
+        stage: "生成体素碰撞数据", error: null
       });
-      await runProcess(process.execPath, [tilerCli, source, tiles, "--input-convention", dataset.inputConvention, "--memory-budget", "4", ...fixedGsTilerArguments(), "--no-open-inspector"], this.logger, dataset.id, signal);
-      signal.throwIfAborted();
-      await stat(path.join(tiles, "tileset.json"));
-      buildSummary = JSON.parse(await readFile(path.join(tiles, "build_summary.json"), "utf8")) as LodBuildSummary;
-      validateFixedGsLodSummary(buildSummary);
+      await this.buildCollision(dataset, source, collision, signal);
     }
 
-    if (visualOnlyRebuild) {
-      const publishedCollision = path.join(destination, "collision");
-      await validateCollisionArtifacts(publishedCollision);
-      const revision = randomUUID();
-      const report = await buildLodReport({
-        datasetId: dataset.id,
-        visualRevision: revision,
-        sourcePath: source,
-        tilesDirectory: tiles,
-        collisionDirectory: publishedCollision,
-        tilerVersion: await installedTilerVersion()
-      });
-      await writeLodReport(tiles, report);
-      signal.throwIfAborted();
-      await publishVisualRevision({
-        datasetRoot: destination,
-        stagedTilesDirectory: tiles,
-        record: visualRecordFromReport(report)
-      });
-      await rm(output, { recursive: true, force: true });
-      this.db.updateDataset(dataset.id, {
-        status: "ready", collisionStatus: "ready", progress: 100,
-        stage: "高清 Gaussian 3D Tiles 已发布，碰撞、标签和航迹保持不变", error: null,
-        activeVisualRevision: revision, lodPolicyVersion: GS_LOD_POLICY_VERSION, visualBuildTarget: null
-      });
-      return;
-    }
+    signal.throwIfAborted();
+    await rm(path.join(output, "aholo-artifact-manifest.json"), { force: true });
+    await rm(path.join(output, "aholo-visual-revisions"), { recursive: true, force: true });
+    const revision = await this.buildAndPublishAholoVisual(dataset, signal, collision, output, false);
+    await promotePublishedOutput(output, destination, previousPublished);
+    this.collisions.invalidate(dataset.id);
+    this.db.updateDataset(dataset.id, {
+      status: "ready", collisionStatus: "ready", progress: 100, stage: "可视化与碰撞数据已发布", error: null,
+      aholoVisualRevision: revision, aholoPolicyVersion: AHOLO_POLICY_VERSION
+    });
+  }
 
-    this.db.updateDataset(dataset.id, { status: "collision_processing", collisionStatus: "processing", progress: 60, stage: "生成体素碰撞数据" });
-    const args = [splatCli, "-g", config.gpuDevice, source];
-    for (const coordinateRotation of sourceCoordinateRotations(buildSummary.source_coordinate_system)) args.push("--rotate", coordinateRotation);
+  private async processAholoVisual(dataset: Dataset, signal: AbortSignal) {
+    const source = path.join(config.sourcesDir, `${dataset.id}.ply`);
+    await validatePly(source);
+    const destination = path.join(config.publishedDir, dataset.id);
+    const collisionDirectory = path.join(destination, "collision");
+    await validateCollisionArtifacts(collisionDirectory);
+    const revision = await this.buildAndPublishAholoVisual(dataset, signal, collisionDirectory, destination, true);
+    this.db.updateDataset(dataset.id, {
+      status: "ready", collisionStatus: "ready", progress: 100,
+      stage: "AHoLo 视觉已发布，碰撞、标签和航迹保持不变",
+      error: null,
+      aholoVisualRevision: revision,
+      aholoPolicyVersion: AHOLO_POLICY_VERSION
+    });
+  }
+
+  private async buildAndPublishAholoVisual(
+    dataset: Dataset,
+    signal: AbortSignal,
+    collisionDirectory: string,
+    datasetRoot: string,
+    rebuilding: boolean
+  ) {
+    const source = path.join(config.sourcesDir, `${dataset.id}.ply`);
+    const revision = randomUUID();
+    const workRoot = path.join(config.workDir, dataset.id, "aholo-visual");
+    const stagedRoot = path.join(workRoot, revision);
+    const eszDirectory = path.join(stagedRoot, "esz");
+    const referenceDirectory = path.join(stagedRoot, "ply-reference");
+    await rm(workRoot, { recursive: true, force: true });
+    await mkdir(stagedRoot, { recursive: true });
+
+    this.db.updateDataset(dataset.id, {
+      status: rebuilding ? "rebuilding" : "tiling", progress: rebuilding ? 10 : 62,
+      stage: rebuilding ? "重建 AHoLo 无损 Chunk LOD；上一版本继续服务" : "构建 AHoLo 无损 Chunk LOD", error: null
+    });
+    const referencePipelinePath = path.join(workRoot, "ply-reference-pipeline.json");
+    await writeFile(referencePipelinePath, `${JSON.stringify(createAholoPipeline(source, referenceDirectory), null, 2)}\n`);
+    await runProcess(process.execPath, [aholoSplatCli, referencePipelinePath], this.logger, dataset.id, signal);
+    signal.throwIfAborted();
+
+    this.db.updateDataset(dataset.id, {
+      status: rebuilding ? "rebuilding" : "tiling", progress: rebuilding ? 58 : 82,
+      stage: "逐 Chunk 编码高精度 ESZ；每个 Chunk 完成后立即释放解码内存", error: null
+    });
+    const referenceFiles = await prepareAholoEszMeta(referenceDirectory, eszDirectory);
+    const eszPipelinePath = path.join(workRoot, "esz-pipeline.json");
+    await writeFile(eszPipelinePath, `${JSON.stringify(createAholoEszConversionPipeline(referenceDirectory, eszDirectory, referenceFiles), null, 2)}\n`);
+    await runProcess(process.execPath, [aholoSplatCli, eszPipelinePath], this.logger, dataset.id, signal);
+    signal.throwIfAborted();
+
+    this.db.updateDataset(dataset.id, { status: rebuilding ? "rebuilding" : "tiling", progress: 92, stage: "校验 AHoLo LOD0、层级覆盖、SH 与碰撞 revision" });
+    const report = await validateAholoRevision({
+      datasetId: dataset.id,
+      revision,
+      sourcePath: source,
+      collisionDirectory,
+      stagedRoot,
+      toolVersion: await installedAholoTilerVersion()
+    });
+    await writeAholoReport(stagedRoot, report);
+    signal.throwIfAborted();
+    await publishAholoRevision({ datasetRoot, stagedRoot, report });
+    await rm(workRoot, { recursive: true, force: true });
+    return revision;
+  }
+
+  private async buildCollision(dataset: Dataset, source: string, collision: string, signal: AbortSignal) {
+    const args = [splatCli, "-g", config.gpuDevice, source, "--rotate", "0,0,180"];
     args.push("--voxel-size", String(dataset.voxelSize), "--voxel-opacity", String(dataset.voxelOpacity));
     if (dataset.sceneType === "outdoor") args.push("--voxel-floor-fill", "1.6");
     else {
@@ -261,103 +266,31 @@ export class ProcessingWorker {
     }
     signal.throwIfAborted();
     const collisionMetadataPath = path.join(collision, "scene.voxel.json");
-    await validateCollisionArtifacts(collision);
+    await validateCollisionFiles(collision);
     const collisionMetadata: unknown = JSON.parse(await readFile(collisionMetadataPath, "utf8"));
-    if (!collisionMetadata || typeof collisionMetadata !== "object" || Array.isArray(collisionMetadata)) {
-      throw new Error("碰撞体元数据格式无效");
-    }
-    const collisionMetadataObject = collisionMetadata as Record<string, unknown>;
-    collisionMetadataObject.coordinateFrame = "tile_local_z_up";
-    await writeFile(collisionMetadataPath, `${JSON.stringify(collisionMetadataObject, null, 2)}\n`);
-
-    signal.throwIfAborted();
-    const revision = randomUUID();
-    const report = await buildLodReport({
-      datasetId: dataset.id,
-      visualRevision: revision,
-      sourcePath: source,
-      tilesDirectory: tiles,
-      collisionDirectory: collision,
-      tilerVersion: await installedTilerVersion()
-    });
-    await writeLodReport(tiles, report);
-    const manifest = await prepareInitialVisualLayout(dataset.id, output, tiles, visualRecordFromReport(report));
-    await writeArtifactManifestAtomic(output, manifest);
-    await promotePublishedOutput(output, destination, previousPublished);
-    this.collisions.invalidate(dataset.id);
-    this.db.updateDataset(dataset.id, {
-      status: "ready", collisionStatus: "ready", progress: 100, stage: "可视化与碰撞数据已发布", error: null,
-      activeVisualRevision: revision, lodPolicyVersion: GS_LOD_POLICY_VERSION, visualBuildTarget: null
-    });
+    if (!collisionMetadata || typeof collisionMetadata !== "object" || Array.isArray(collisionMetadata)) throw new Error("碰撞体元数据格式无效");
+    (collisionMetadata as Record<string, unknown>).coordinateFrame = "tile_local_z_up";
+    await writeFile(collisionMetadataPath, `${JSON.stringify(collisionMetadata, null, 2)}\n`);
+    await validateCollisionArtifacts(collision);
   }
+}
 
-  private async processAholoVisual(dataset: Dataset, signal: AbortSignal) {
-    const source = path.join(config.sourcesDir, `${dataset.id}.ply`);
-    await validatePly(source);
-    const destination = path.join(config.publishedDir, dataset.id);
-    const collisionDirectory = path.join(destination, "collision");
-    await validateCollisionArtifacts(collisionDirectory);
-    const cesiumVisual = await resolveActiveVisual(destination, dataset);
-    const summary = JSON.parse(await readFile(path.join(cesiumVisual.tilesDirectory, "build_summary.json"), "utf8")) as LodBuildSummary;
-    if (summary.source_coordinate_system !== "z_up") {
-      throw new Error(`AHoLo 固定 Rx(-90°) 映射只接受已审计的 z_up 源；当前为 ${summary.source_coordinate_system ?? "unknown"}，系统未静默改轴`);
-    }
-
-    const revision = randomUUID();
-    const workRoot = path.join(config.workDir, dataset.id, "aholo-visual");
-    const stagedRoot = path.join(workRoot, revision);
-    const eszDirectory = path.join(stagedRoot, "esz");
-    const referenceDirectory = path.join(stagedRoot, "ply-reference");
-    await rm(workRoot, { recursive: true, force: true });
-    await mkdir(stagedRoot, { recursive: true });
-
-    this.db.updateDataset(dataset.id, {
-      status: "rebuilding", progress: 10,
-      stage: "从源 PLY 构建唯一无损 Chunk LOD 拓扑；生产 Cesium 继续服务", error: null
-    });
-    const referencePipelinePath = path.join(workRoot, "ply-reference-pipeline.json");
-    await writeFile(referencePipelinePath, `${JSON.stringify(createAholoPipeline(source, referenceDirectory), null, 2)}\n`);
-    await runProcess(process.execPath, [aholoSplatCli, referencePipelinePath], this.logger, dataset.id, signal);
-    signal.throwIfAborted();
-
-    this.db.updateDataset(dataset.id, {
-      status: "rebuilding", progress: 58,
-      stage: "逐 Chunk 编码高精度 ESZ；每个 Chunk 完成后立即释放解码内存", error: null
-    });
-    const referenceFiles = await prepareAholoEszMeta(referenceDirectory, eszDirectory);
-    const eszPipelinePath = path.join(workRoot, "esz-pipeline.json");
-    await writeFile(eszPipelinePath, `${JSON.stringify(createAholoEszConversionPipeline(referenceDirectory, eszDirectory, referenceFiles), null, 2)}\n`);
-    await runProcess(process.execPath, [aholoSplatCli, eszPipelinePath], this.logger, dataset.id, signal);
-    signal.throwIfAborted();
-
-    this.db.updateDataset(dataset.id, { status: "rebuilding", progress: 92, stage: "校验 AHoLo LOD0、层级覆盖、SH 与碰撞 revision" });
-    const report = await validateAholoRevision({
-      datasetId: dataset.id,
-      revision,
-      sourcePath: source,
-      collisionDirectory,
-      stagedRoot,
-      toolVersion: await installedAholoTilerVersion()
-    });
-    await writeAholoReport(stagedRoot, report);
-    signal.throwIfAborted();
-    await publishAholoRevision({ datasetRoot: destination, stagedRoot, report });
-    await rm(workRoot, { recursive: true, force: true });
-    this.db.updateDataset(dataset.id, {
-      status: "ready", collisionStatus: "ready", progress: 100,
-      stage: "AHoLo 候选视觉已发布到 renderer-lab；生产 Renderer 未切换",
-      error: null,
-      aholoVisualRevision: revision,
-      aholoPolicyVersion: AHOLO_POLICY_VERSION,
-      visualBuildTarget: null
-    });
+async function validateCollisionFiles(directory: string) {
+  for (const name of ["scene.voxel.json", "scene.voxel.bin", "scene.collision.glb"]) {
+    const value = await stat(path.join(directory, name));
+    if (!value.isFile() || value.size <= 0) throw new Error(`碰撞产物 ${name} 无效`);
   }
 }
 
 async function validateCollisionArtifacts(directory: string) {
-  await stat(path.join(directory, "scene.voxel.json"));
-  await stat(path.join(directory, "scene.voxel.bin"));
-  await stat(path.join(directory, "scene.collision.glb"));
+  await validateCollisionFiles(directory);
+  const metadata = JSON.parse(await readFile(path.join(directory, "scene.voxel.json"), "utf8")) as { coordinateFrame?: unknown };
+  if (metadata.coordinateFrame !== "tile_local_z_up") throw new Error("碰撞产物缺少 tile_local_z_up 坐标契约");
+}
+
+async function hasValidCollisionArtifacts(directory: string) {
+  try { await validateCollisionArtifacts(directory); return true; }
+  catch { return false; }
 }
 
 async function pathExists(filename: string) {
@@ -390,80 +323,12 @@ async function promotePublishedOutput(output: string, destination: string, previ
   if (hasPrevious) await rm(previousPublished, { recursive: true, force: true });
 }
 
-interface LodBuildSummary {
-  source_coordinate_system?: string;
-  converted_splats?: number;
-  max_depth?: number;
-  max_depth_source?: string;
-  max_leaf_limit?: number;
-  min_leaf_limit?: number;
-  sampling_rate_per_level?: number;
-  lod_multiplier_preset?: string;
-  coverage_boost_scale?: number;
-  opacity_filter?: number;
-  geometric_error_layer_multiplier?: number;
-  geometric_error_scale?: number;
-  bounds_mode?: string;
-}
-
-async function reusableGsTilesSummary(tilesDirectory: string): Promise<LodBuildSummary | null> {
-  try {
-    await stat(path.join(tilesDirectory, "tileset.json"));
-    const summary = JSON.parse(await readFile(path.join(tilesDirectory, "build_summary.json"), "utf8")) as LodBuildSummary;
-    validateFixedGsLodSummary(summary);
-    return summary;
-  } catch {
-    return null;
-  }
-}
-
-export function validateFixedGsLodSummary(summary: LodBuildSummary) {
-  const effectiveSplats = Number(summary.converted_splats);
-  if (!Number.isFinite(effectiveSplats) || effectiveSplats <= 0) {
-    throw new Error("GS LOD 产物缺少有效的 converted_splats");
-  }
-  const expectedDepth = calculateGsLodDepth(effectiveSplats);
-  const mismatches: string[] = [];
-  if (summary.max_depth_source !== "auto") mismatches.push("max_depth_source");
-  if (summary.max_depth !== expectedDepth) mismatches.push(`max_depth=${summary.max_depth}, expected=${expectedDepth}`);
-  if (summary.max_leaf_limit !== GS_LOD_POLICY.maxLeafSplats) mismatches.push("max_leaf_limit");
-  if (summary.min_leaf_limit !== GS_LOD_POLICY.minLeafSplats) mismatches.push("min_leaf_limit");
-  if (summary.sampling_rate_per_level !== GS_LOD_POLICY.samplingRatePerLevel) mismatches.push("sampling_rate_per_level");
-  if (summary.lod_multiplier_preset !== GS_LOD_POLICY.lodMultiplier) mismatches.push("lod_multiplier_preset");
-  if (summary.coverage_boost_scale !== GS_LOD_POLICY.coverageBoostScale) mismatches.push("coverage_boost_scale");
-  if (summary.opacity_filter !== GS_LOD_POLICY.opacityFilter) mismatches.push("opacity_filter");
-  if (summary.geometric_error_layer_multiplier !== GS_LOD_POLICY.geometricErrorLayerMultiplier) mismatches.push("geometric_error_layer_multiplier");
-  if (summary.geometric_error_scale !== GS_LOD_POLICY.geometricErrorScale) mismatches.push("geometric_error_scale");
-  if (summary.bounds_mode !== GS_LOD_POLICY.boundsMode) mismatches.push("bounds_mode");
-  if (mismatches.length) throw new Error(`GS LOD 产物不符合平台固定策略：${mismatches.join(", ")}`);
-}
-
-async function installedTilerVersion() {
-  const value = JSON.parse(
-    await readFile(path.join(packageRoot, "3dgs-ply-3dtiles-converter", "package.json"), "utf8")
-  ) as { version?: unknown };
-  if (typeof value.version !== "string" || !value.version) {
-    throw new Error("无法读取 Gaussian 3D Tiles 转换器版本");
-  }
-  return value.version;
-}
-
 async function installedAholoTilerVersion() {
   const value = JSON.parse(
     await readFile(path.join(packageRoot, "@manycore/aholo-splat-transform", "package.json"), "utf8")
   ) as { version?: unknown };
   if (typeof value.version !== "string" || !value.version) throw new Error("无法读取 AHoLo 转换器版本");
   return value.version;
-}
-
-/** Match the tiler's audited source basis so tags and collision voxels share tile-local Z-up coordinates. */
-export function sourceCoordinateRotations(sourceCoordinateSystem?: string) {
-  // splat-transform imports PLY data with an X/Y handedness flip. Compose
-  // rotations so its collision output exactly matches the tiler's Z-up frame.
-  if (sourceCoordinateSystem === "z_up") return ["0,0,180"];
-  if (sourceCoordinateSystem === "gltf_y_up") return ["90,0,0", "0,180,0"];
-  if (sourceCoordinateSystem === "camera_y_down_z_forward") return ["270,0,0", "0,180,0"];
-  throw new Error(`3D Tiles 转换器返回未知源坐标系：${sourceCoordinateSystem ?? "未提供"}`);
 }
 
 async function runProcess(command: string, args: string[], logger: FastifyBaseLogger, datasetId: string, signal: AbortSignal) {

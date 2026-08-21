@@ -10,6 +10,7 @@ afterEach(() => { for (const directory of directories.splice(0)) rmSync(director
 
 const datasetInput = (name: string) => ({
   name, sourceFileName: `${name}.ply`, sourceSize: 1, sceneType: "outdoor", inputConvention: "graphdeco",
+  sourceCoordinateSystem: "z_up",
   voxelSize: 0.1, voxelOpacity: 0.1,
   placement: { longitude: 0, latitude: 0, height: 0, heading: 0, pitch: 0, roll: 0, scale: 1 }
 });
@@ -93,7 +94,7 @@ describe("scene-bound label and mission API", () => {
     } finally { await app.close(); }
   });
 
-  it("rebuilds visual tiles while keeping the last published collision and tiles serviceable", async () => {
+  it("queues an AHoLo visual rebuild while keeping published collision serviceable", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "spikive-app-rebuild-")); directories.push(directory);
     Object.assign(config, {
       dataDir: directory, dbPath: path.join(directory, "platform.sqlite"), uploadsDir: path.join(directory, "uploads"),
@@ -105,21 +106,18 @@ describe("scene-bound label and mission API", () => {
       const dataset = (await app.inject({ method: "POST", url: "/api/datasets", payload: datasetInput("rebuild") })).json();
       const published = path.join(directory, "published", dataset.id);
       mkdirSync(path.join(directory, "sources"), { recursive: true });
-      mkdirSync(path.join(published, "tiles"), { recursive: true });
       mkdirSync(path.join(published, "collision"), { recursive: true });
       writeFileSync(path.join(directory, "sources", `${dataset.id}.ply`), "source");
-      writeFileSync(path.join(published, "tiles", "tileset.json"), JSON.stringify({ asset: { version: "1.1" }, root: { geometricError: 1, content: { uri: "tiles/0.glb" } } }));
-      writeFileSync(path.join(published, "tiles", "build_summary.json"), JSON.stringify({ converted_splats: 1 }));
       for (const name of ["scene.voxel.json", "scene.voxel.bin", "scene.collision.glb"]) writeFileSync(path.join(published, "collision", name), "artifact");
       db.updateDataset(dataset.id, { status: "ready", collisionStatus: "ready", progress: 100, stage: "已发布" });
 
-      const rebuild = await app.inject({ method: "POST", url: `/api/datasets/${dataset.id}/rebuild-tiles` });
+      const rebuild = await app.inject({ method: "POST", url: `/api/datasets/${dataset.id}/rebuild-visuals` });
       expect(rebuild.statusCode).toBe(200);
       expect(rebuild.json()).toMatchObject({ status: "rebuilding", collisionStatus: "ready" });
 
-      const tileset = await app.inject({ method: "GET", url: `/api/datasets/${dataset.id}/tiles/tileset.json` });
-      expect(tileset.statusCode).toBe(200);
-      expect(tileset.json().root.content.uri).toContain("revision=");
+      const collision = await app.inject({ method: "GET", url: `/api/datasets/${dataset.id}/collision/scene.voxel.bin` });
+      expect(collision.statusCode).toBe(200);
+      expect((await app.inject({ method: "POST", url: `/api/datasets/${dataset.id}/rebuild-tiles` })).statusCode).toBe(404);
     } finally { await app.close(); }
   });
 });

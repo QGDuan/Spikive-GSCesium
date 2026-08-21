@@ -30,12 +30,11 @@ export class Database {
       CREATE TABLE IF NOT EXISTS datasets (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, source_file_name TEXT NOT NULL,
         source_size INTEGER NOT NULL, scene_type TEXT NOT NULL, input_convention TEXT NOT NULL,
+        source_coordinate_system TEXT,
         voxel_size REAL NOT NULL, voxel_opacity REAL NOT NULL, indoor_seed TEXT,
         placement TEXT NOT NULL, status TEXT NOT NULL, collision_status TEXT NOT NULL,
         progress INTEGER NOT NULL DEFAULT 0, stage TEXT NOT NULL DEFAULT '', error TEXT,
-        upload_id TEXT, active_visual_revision TEXT, lod_policy_version TEXT,
-        visual_backend TEXT NOT NULL DEFAULT 'cesium-3dtiles',
-        aholo_visual_revision TEXT, aholo_policy_version TEXT, visual_build_target TEXT,
+        upload_id TEXT, aholo_visual_revision TEXT, aholo_policy_version TEXT,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS labels (
@@ -60,30 +59,19 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_missions_dataset ON missions(dataset_id);
       CREATE INDEX IF NOT EXISTS idx_waypoints_mission ON waypoints(mission_id, sequence);
     `);
-    this.migrateDatasetVisualRevisions();
+    this.migrateDatasetVisualFields();
     this.migrateMissionStartLabels();
     this.migrateDetailedRouteProfiles();
   }
 
-  private migrateDatasetVisualRevisions() {
+  private migrateDatasetVisualFields() {
     const columns = this.sqlite.prepare("PRAGMA table_info(datasets)").all() as Array<{ name: string }>;
-    if (!columns.some(column => column.name === "active_visual_revision")) {
-      this.sqlite.exec("ALTER TABLE datasets ADD COLUMN active_visual_revision TEXT;");
-    }
-    if (!columns.some(column => column.name === "lod_policy_version")) {
-      this.sqlite.exec("ALTER TABLE datasets ADD COLUMN lod_policy_version TEXT;");
-    }
-    if (!columns.some(column => column.name === "visual_backend")) {
-      this.sqlite.exec("ALTER TABLE datasets ADD COLUMN visual_backend TEXT NOT NULL DEFAULT 'cesium-3dtiles';");
-    }
+    if (!columns.some(column => column.name === "source_coordinate_system")) this.sqlite.exec("ALTER TABLE datasets ADD COLUMN source_coordinate_system TEXT;");
     if (!columns.some(column => column.name === "aholo_visual_revision")) {
       this.sqlite.exec("ALTER TABLE datasets ADD COLUMN aholo_visual_revision TEXT;");
     }
     if (!columns.some(column => column.name === "aholo_policy_version")) {
       this.sqlite.exec("ALTER TABLE datasets ADD COLUMN aholo_policy_version TEXT;");
-    }
-    if (!columns.some(column => column.name === "visual_build_target")) {
-      this.sqlite.exec("ALTER TABLE datasets ADD COLUMN visual_build_target TEXT;");
     }
   }
 
@@ -138,18 +126,16 @@ export class Database {
     this.sqlite.prepare(`
       INSERT INTO datasets (
         id, name, source_file_name, source_size, scene_type, input_convention,
-        voxel_size, voxel_opacity, indoor_seed, placement, status, collision_status,
-        progress, stage, error, upload_id, active_visual_revision, lod_policy_version,
-        visual_backend, aholo_visual_revision, aholo_policy_version, visual_build_target,
+        source_coordinate_system, voxel_size, voxel_opacity, indoor_seed, placement, status, collision_status,
+        progress, stage, error, upload_id, aholo_visual_revision, aholo_policy_version,
         created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       dataset.id, dataset.name, dataset.sourceFileName, dataset.sourceSize, dataset.sceneType,
-      dataset.inputConvention, dataset.voxelSize, dataset.voxelOpacity,
+      dataset.inputConvention, dataset.sourceCoordinateSystem, dataset.voxelSize, dataset.voxelOpacity,
       dataset.indoorSeed ? JSON.stringify(dataset.indoorSeed) : null, JSON.stringify(dataset.placement),
       dataset.status, dataset.collisionStatus, dataset.progress, dataset.stage, dataset.error,
-      dataset.uploadId, dataset.activeVisualRevision, dataset.lodPolicyVersion,
-      dataset.visualBackend, dataset.aholoVisualRevision, dataset.aholoPolicyVersion, dataset.visualBuildTarget,
+      dataset.uploadId, dataset.aholoVisualRevision, dataset.aholoPolicyVersion,
       dataset.createdAt, dataset.updatedAt
     );
   }
@@ -157,11 +143,10 @@ export class Database {
     const current = this.getDataset(id);
     if (!current) return null;
     const next = { ...current, ...values, updatedAt: new Date().toISOString() };
-    this.sqlite.prepare(`UPDATE datasets SET name=?,voxel_size=?,voxel_opacity=?,indoor_seed=?,placement=?,status=?,collision_status=?,progress=?,stage=?,error=?,upload_id=?,active_visual_revision=?,lod_policy_version=?,visual_backend=?,aholo_visual_revision=?,aholo_policy_version=?,visual_build_target=?,updated_at=? WHERE id=?`).run(
-      next.name, next.voxelSize, next.voxelOpacity, next.indoorSeed ? JSON.stringify(next.indoorSeed) : null,
+    this.sqlite.prepare(`UPDATE datasets SET name=?,source_coordinate_system=?,voxel_size=?,voxel_opacity=?,indoor_seed=?,placement=?,status=?,collision_status=?,progress=?,stage=?,error=?,upload_id=?,aholo_visual_revision=?,aholo_policy_version=?,updated_at=? WHERE id=?`).run(
+      next.name, next.sourceCoordinateSystem, next.voxelSize, next.voxelOpacity, next.indoorSeed ? JSON.stringify(next.indoorSeed) : null,
       JSON.stringify(next.placement), next.status, next.collisionStatus, next.progress, next.stage,
-      next.error, next.uploadId, next.activeVisualRevision, next.lodPolicyVersion, next.visualBackend,
-      next.aholoVisualRevision, next.aholoPolicyVersion, next.visualBuildTarget, next.updatedAt, id
+      next.error, next.uploadId, next.aholoVisualRevision, next.aholoPolicyVersion, next.updatedAt, id
     );
     return next;
   }
@@ -289,18 +274,16 @@ export class Database {
 const datasetFromRow = (row: Row): Dataset => ({
   id: String(row.id), name: String(row.name), sourceFileName: String(row.source_file_name),
   sourceSize: Number(row.source_size), sceneType: row.scene_type as Dataset["sceneType"],
-  inputConvention: row.input_convention as Dataset["inputConvention"], voxelSize: Number(row.voxel_size),
+  inputConvention: row.input_convention as Dataset["inputConvention"],
+  sourceCoordinateSystem: row.source_coordinate_system === "z_up" ? "z_up" : null,
+  voxelSize: Number(row.voxel_size),
   voxelOpacity: Number(row.voxel_opacity), indoorSeed: row.indoor_seed ? JSON.parse(String(row.indoor_seed)) : null,
   placement: JSON.parse(String(row.placement)), status: row.status as Dataset["status"],
   collisionStatus: row.collision_status as Dataset["collisionStatus"], progress: Number(row.progress),
   stage: String(row.stage), error: row.error ? String(row.error) : null,
   uploadId: row.upload_id ? String(row.upload_id) : null,
-  visualBackend: (row.visual_backend ? String(row.visual_backend) : "cesium-3dtiles") as Dataset["visualBackend"],
-  activeVisualRevision: row.active_visual_revision ? String(row.active_visual_revision) : null,
-  lodPolicyVersion: row.lod_policy_version ? String(row.lod_policy_version) : null,
   aholoVisualRevision: row.aholo_visual_revision ? String(row.aholo_visual_revision) : null,
   aholoPolicyVersion: row.aholo_policy_version ? String(row.aholo_policy_version) : null,
-  visualBuildTarget: row.visual_build_target ? String(row.visual_build_target) as Dataset["visualBuildTarget"] : null,
   createdAt: String(row.created_at), updatedAt: String(row.updated_at)
 });
 const labelFromRow = (row: Row): InspectionLabel => ({

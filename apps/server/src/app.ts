@@ -11,18 +11,13 @@ import { ZodError } from "zod";
 import {
   createDatasetSchema, patchDatasetSchema, createLabelSchema, patchLabelSchema, raycastSchema,
   createMissionSchema, patchMissionSchema, type Dataset, type InspectionLabel, type Mission,
-  type RenderManifest, normalize, mul, visualBackendSchema
+  type RenderManifest, normalize, mul
 } from "@spikive/shared";
 import { config } from "./config.js";
 import { Database } from "./db.js";
 import { CollisionRepository } from "./collision.js";
 import { ProcessingWorker } from "./worker.js";
 import { planMission } from "./planner.js";
-import { transformTileset } from "./coordinates.js";
-import {
-  activateVisualRevision, pruneExpiredVisualRevisions, readArtifactManifest, readLodReport, resolveActiveVisual,
-  resolveVisualRevision
-} from "./visual-artifacts.js";
 import {
   AHOLO_CHUNK_LOD_POLICY, activateAholoRevision, readAholoManifest, readAholoReport, readVersionedLodMeta, resolveAholoRevision
 } from "./aholo-artifacts.js";
@@ -56,7 +51,7 @@ export async function buildApp(): Promise<AppContext> {
     maxAge: 86400
   });
   const db = new Database(config.dbPath);
-  await reconcileVisualRevisionFields(db);
+  await reconcileAholoRevisionFields(db);
   const collisions = new CollisionRepository(config.publishedDir, config.collisionCacheBytes);
   const worker = new ProcessingWorker(db, collisions, app.log);
   app.addHook("onClose", async () => { await worker.stop(); db.close(); });
@@ -77,9 +72,8 @@ export async function buildApp(): Promise<AppContext> {
     const input = createDatasetSchema.parse(request.body); const now = new Date().toISOString();
     const dataset: Dataset = {
       ...input, indoorSeed: input.indoorSeed ?? null, id: randomUUID(),
-      visualBackend: "cesium-3dtiles",
-      activeVisualRevision: null, lodPolicyVersion: null,
-      aholoVisualRevision: null, aholoPolicyVersion: null, visualBuildTarget: null,
+      sourceCoordinateSystem: input.sourceCoordinateSystem,
+      aholoVisualRevision: null, aholoPolicyVersion: null,
       status: "created", collisionStatus: "pending", progress: 0, stage: "等待上传",
       error: null, uploadId: null, createdAt: now, updatedAt: now
     };
@@ -107,41 +101,15 @@ export async function buildApp(): Promise<AppContext> {
     const dataset = requireResource(db.getDataset(request.params.id)); if (dataset.status !== "failed") return reply.code(409).send({ error: "只有失败任务可以重试" });
     const next = db.updateDataset(dataset.id, { status: "queued", collisionStatus: "pending", progress: 5, stage: "重新排队", error: null }); worker.wake(); return next;
   });
-  app.post<{ Params: { id: string } }>("/api/datasets/:id/rebuild-tiles", async (request, reply) => {
-    const dataset = requireResource(db.getDataset(request.params.id));
-    if (dataset.status !== "ready" || dataset.collisionStatus !== "ready") {
-      return reply.code(409).send({ error: "只有已完整发布的数据集可以重建高清切片" });
-    }
-    try {
-      await Promise.all([
-        stat(path.join(config.sourcesDir, `${dataset.id}.ply`)),
-        resolveActiveVisual(path.join(config.publishedDir, dataset.id), dataset)
-          .then(active => stat(path.join(active.tilesDirectory, "build_summary.json"))),
-        stat(path.join(config.publishedDir, dataset.id, "collision", "scene.voxel.json")),
-        stat(path.join(config.publishedDir, dataset.id, "collision", "scene.voxel.bin")),
-        stat(path.join(config.publishedDir, dataset.id, "collision", "scene.collision.glb"))
-      ]);
-    } catch {
-      return reply.code(409).send({ error: "源文件或上一已发布产物不完整，不能执行在线高清重建" });
-    }
-    const next = db.updateDataset(dataset.id, {
-      status: "rebuilding", progress: 5, stage: "高清 LOD 重建已排队；上一版本继续服务", error: null,
-      visualBuildTarget: "cesium-3dtiles"
-    });
-    worker.wake();
-    return next;
-  });
   app.post<{ Params: { id: string } }>("/api/datasets/:id/rebuild-visuals", async (request, reply) => {
     const dataset = requireResource(db.getDataset(request.params.id));
     if (dataset.status !== "ready" || dataset.collisionStatus !== "ready") {
-      return reply.code(409).send({ error: "只有已完整发布的数据集可以构建 AHoLo 候选视觉" });
+      return reply.code(409).send({ error: "只有碰撞数据已完整发布的数据集可以构建 AHoLo 视觉" });
+    }
+    if (dataset.sourceCoordinateSystem !== "z_up") {
+      return reply.code(409).send({ error: "旧数据缺少可确认的 z_up 源坐标审计，不能静默转换为 AHoLo" });
     }
     try {
-      const active = await resolveActiveVisual(path.join(config.publishedDir, dataset.id), dataset);
-      const summary = JSON.parse(await readFile(path.join(active.tilesDirectory, "build_summary.json"), "utf8")) as { source_coordinate_system?: string };
-      if (summary.source_coordinate_system !== "z_up") {
-        return reply.code(409).send({ error: `当前源轴向为 ${summary.source_coordinate_system ?? "unknown"}；AHoLo 固定坐标契约要求 z_up，系统未静默改轴` });
-      }
       await Promise.all([
         stat(path.join(config.sourcesDir, `${dataset.id}.ply`)),
         stat(path.join(config.publishedDir, dataset.id, "collision", "scene.voxel.json")),
@@ -149,12 +117,12 @@ export async function buildApp(): Promise<AppContext> {
         stat(path.join(config.publishedDir, dataset.id, "collision", "scene.collision.glb"))
       ]);
     } catch {
-      return reply.code(409).send({ error: "源 PLY、Cesium 轴向审计或碰撞产物不完整，不能构建 AHoLo 候选视觉" });
+      return reply.code(409).send({ error: "源 PLY 或碰撞产物不完整，不能构建 AHoLo 视觉" });
     }
     const next = db.updateDataset(dataset.id, {
       status: "rebuilding", progress: 5,
-      stage: "AHoLo Chunk LOD 已排队；生产 Cesium 继续服务", error: null,
-      visualBuildTarget: "aholo-chunk-lod"
+      stage: dataset.aholoVisualRevision ? "AHoLo Chunk LOD 重建已排队；上一版本继续服务" : "AHoLo Chunk LOD 构建已排队",
+      error: null
     });
     worker.wake();
     return next;
@@ -162,108 +130,31 @@ export async function buildApp(): Promise<AppContext> {
 
   registerTus(app, db, worker);
 
-  app.get<{ Params: { id: string } }>("/api/datasets/:id/tiles/tileset.json", async (request, reply) => {
-    const dataset = requireResource(db.getDataset(request.params.id)); if (!["ready", "rebuilding"].includes(dataset.status)) return reply.code(409).send({ error: "数据尚未发布" });
-    const active = await resolveActiveVisual(path.join(config.publishedDir, dataset.id), dataset);
-    const json = JSON.parse(await readFile(path.join(active.tilesDirectory, "tileset.json"), "utf8"));
-    const contentBaseUrl = active.record
-      ? `/api/datasets/${dataset.id}/visual-revisions/${encodeURIComponent(active.revision)}/tiles`
-      : undefined;
-    reply.header("Cache-Control", "no-cache");
-    return transformTileset(json, dataset.placement, { contentRevision: active.revision, contentBaseUrl });
-  });
-  app.get<{ Params: { id: string; "*": string } }>("/api/datasets/:id/tiles/*", async (request, reply) => {
-    const dataset = requireResource(db.getDataset(request.params.id)); if (!["ready", "rebuilding"].includes(dataset.status)) return reply.code(409).send({ error: "数据尚未发布" });
-    const relative = request.params["*"]; if (!isSafeRelativePath(relative)) return reply.code(400).send({ error: "无效资源路径" });
-    const active = await resolveActiveVisual(path.join(config.publishedDir, dataset.id), dataset);
-    return reply.sendFile(relative, active.tilesDirectory, { immutable: true, maxAge: "1y" });
-  });
-  app.get<{ Params: { id: string; revision: string; "*": string } }>("/api/datasets/:id/visual-revisions/:revision/tiles/*", async (request, reply) => {
+  app.get<{ Params: { id: string } }>("/api/datasets/:id/render-manifest", async (request, reply) => {
     const dataset = requireResource(db.getDataset(request.params.id));
     if (!["ready", "rebuilding"].includes(dataset.status)) return reply.code(409).send({ error: "数据尚未发布" });
-    if (!isSafeRevision(request.params.revision)) return reply.code(400).send({ error: "无效视觉 revision" });
-    const relative = request.params["*"]; if (!isSafeRelativePath(relative)) return reply.code(400).send({ error: "无效资源路径" });
-    const resolved = await resolveVisualRevision(path.join(config.publishedDir, dataset.id), request.params.revision);
-    if (!resolved) return reply.code(404).send({ error: "视觉 revision 不存在或已超过保留期" });
-    return reply.sendFile(relative, resolved.tilesDirectory, { immutable: true, maxAge: "1y" });
-  });
-  app.get<{ Params: { id: string } }>("/api/datasets/:id/lod-report", async (request, reply) => {
-    const dataset = requireResource(db.getDataset(request.params.id));
-    if (!["ready", "rebuilding"].includes(dataset.status)) return reply.code(409).send({ error: "数据尚未发布" });
-    const datasetRoot = path.join(config.publishedDir, dataset.id);
-    const active = await resolveActiveVisual(datasetRoot, dataset);
-    if (!active.record) return reply.code(409).send({ error: "该 legacy 视觉版本没有完整 LOD 报告，请先执行高清重建" });
-    try { return await readLodReport(datasetRoot, active.record); }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
-  });
-  app.post<{ Params: { id: string; revision: string } }>("/api/datasets/:id/visual-revisions/:revision/activate", async (request, reply) => {
-    const dataset = requireResource(db.getDataset(request.params.id));
-    if (dataset.status !== "ready" || dataset.collisionStatus !== "ready") {
-      return reply.code(409).send({ error: "只有完整发布且未处理中的数据集可以切换视觉 revision" });
-    }
-    if (!isSafeRevision(request.params.revision)) return reply.code(400).send({ error: "无效视觉 revision" });
-    try {
-      const manifest = await activateVisualRevision({
-        datasetRoot: path.join(config.publishedDir, dataset.id),
-        revision: request.params.revision,
-        sourcePath: path.join(config.sourcesDir, `${dataset.id}.ply`)
-      });
-      const record = manifest.visualRevisions.find(value => value.revision === manifest.activeVisualRevision)!;
-      return db.updateDataset(dataset.id, {
-        activeVisualRevision: record.revision,
-        lodPolicyVersion: record.policyVersion,
-        stage: `已切换视觉 revision ${record.revision.slice(0, 8)}；碰撞、标签和航迹未变化`,
-        error: null
-      });
-    } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
-    }
-  });
-  app.get<{ Params: { id: string }; Querystring: { backend?: string } }>("/api/datasets/:id/render-manifest", async (request, reply) => {
-    const dataset = requireResource(db.getDataset(request.params.id));
-    if (!["ready", "rebuilding"].includes(dataset.status)) return reply.code(409).send({ error: "数据尚未发布" });
-    const parsedBackend = visualBackendSchema.safeParse(request.query.backend ?? dataset.visualBackend);
-    if (!parsedBackend.success) return reply.code(400).send({ error: "无效 Renderer 类型" });
     const datasetRoot = path.join(config.publishedDir, dataset.id);
     reply.header("Cache-Control", "no-store");
-    if (parsedBackend.data === "aholo-chunk-lod") {
-      const resolved = await resolveAholoRevision(datasetRoot, dataset.aholoVisualRevision ?? undefined);
-      if (!resolved) return reply.code(404).send({ error: "该数据集还没有通过完整性校验的 AHoLo 候选视觉" });
-      const report = await readAholoReport(datasetRoot, resolved.record);
-      const value: RenderManifest = {
-        schemaVersion: 1,
-        datasetId: dataset.id,
-        renderer: "aholo-chunk-lod",
-        activeVisualRevision: resolved.record.revision,
-        source: { sha256: report.source.sha256, splatCount: report.source.splatCount, shDegree: report.source.shDegree },
-        coordinateFrame: "tile_local_z_up",
-        collisionRevision: report.collisionRevision,
-        placement: dataset.placement,
-        aholo: {
-          lodMetaUrl: `/api/datasets/${dataset.id}/aholo-visual-revisions/${encodeURIComponent(resolved.record.revision)}/esz/lod-meta.json`,
-          referenceLodMetaUrl: `/api/datasets/${dataset.id}/aholo-visual-revisions/${encodeURIComponent(resolved.record.revision)}/ply-reference/lod-meta.json`,
-          reportUrl: `/api/datasets/${dataset.id}/aholo-visual-revisions/${encodeURIComponent(resolved.record.revision)}/report`,
-          policyVersion: report.policyVersion,
-          maxBudget: AHOLO_CHUNK_LOD_POLICY.maxBudget,
-          levels: report.levels,
-          transform: report.transform
-        }
-      };
-      return value;
-    }
-    const active = await resolveActiveVisual(datasetRoot, dataset);
-    if (!active.record) return reply.code(409).send({ error: "legacy Cesium 视觉版本缺少渲染清单，请先执行高清重建" });
-    const report = await readLodReport(datasetRoot, active.record);
+    const resolved = await resolveAholoRevision(datasetRoot, dataset.aholoVisualRevision ?? undefined);
+    if (!resolved) return reply.code(404).send({ error: "该数据集还没有通过完整性校验的 AHoLo 视觉，请先执行视觉构建" });
+    const report = await readAholoReport(datasetRoot, resolved.record);
     const value: RenderManifest = {
       schemaVersion: 1,
       datasetId: dataset.id,
-      renderer: "cesium-3dtiles",
-      activeVisualRevision: active.revision,
-      source: { sha256: report.source.sha256, splatCount: report.source.convertedSplats, shDegree: report.source.shDegree },
+      activeVisualRevision: resolved.record.revision,
+      source: { sha256: report.source.sha256, splatCount: report.source.splatCount, shDegree: report.source.shDegree },
       coordinateFrame: "tile_local_z_up",
       collisionRevision: report.collisionRevision,
       placement: dataset.placement,
-      cesium: { tilesetUrl: `/api/datasets/${dataset.id}/tiles/tileset.json`, policyVersion: report.policyVersion }
+      aholo: {
+        lodMetaUrl: `/api/datasets/${dataset.id}/aholo-visual-revisions/${encodeURIComponent(resolved.record.revision)}/esz/lod-meta.json`,
+        referenceLodMetaUrl: `/api/datasets/${dataset.id}/aholo-visual-revisions/${encodeURIComponent(resolved.record.revision)}/ply-reference/lod-meta.json`,
+        reportUrl: `/api/datasets/${dataset.id}/aholo-visual-revisions/${encodeURIComponent(resolved.record.revision)}/report`,
+        policyVersion: report.policyVersion,
+        maxBudget: AHOLO_CHUNK_LOD_POLICY.maxBudget,
+        levels: report.levels,
+        transform: report.transform
+      }
     };
     return value;
   });
@@ -321,22 +212,6 @@ export async function buildApp(): Promise<AppContext> {
       return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
     }
   });
-  app.post<{ Params: { id: string } }>("/api/datasets/:id/render-backend", async (request, reply) => {
-    const dataset = requireResource(db.getDataset(request.params.id));
-    if (dataset.status !== "ready" || dataset.collisionStatus !== "ready") return reply.code(409).send({ error: "数据处理期间不能切换 Renderer" });
-    const input = visualBackendSchema.safeParse(typeof request.body === "object" && request.body !== null && "visualBackend" in request.body
-      ? (request.body as { visualBackend?: unknown }).visualBackend
-      : undefined);
-    if (!input.success) return reply.code(400).send({ error: "无效 Renderer 类型" });
-    if (input.data === "aholo-chunk-lod" && !await resolveAholoRevision(path.join(config.publishedDir, dataset.id), dataset.aholoVisualRevision ?? undefined)) {
-      return reply.code(409).send({ error: "AHoLo 候选视觉尚未构建或已失效" });
-    }
-    return db.updateDataset(dataset.id, {
-      visualBackend: input.data,
-      stage: input.data === "aholo-chunk-lod" ? "本地巡检 Renderer 已切换为 AHoLo" : "本地巡检 Renderer 已回滚为 Cesium",
-      error: null
-    });
-  });
   app.get<{ Params: { id: string; "*": string } }>("/api/datasets/:id/collision/*", async (request, reply) => {
     const dataset = requireResource(db.getDataset(request.params.id));
     if (dataset.collisionStatus !== "ready") return reply.code(409).send({ error: "碰撞数据尚未发布" });
@@ -358,7 +233,6 @@ export async function buildApp(): Promise<AppContext> {
   try {
     await readFile(path.join(webDist, "index.html"));
     await app.register(fastifyStatic, { root: path.join(webDist, "assets"), prefix: "/assets/", decorateReply: false });
-    await app.register(fastifyStatic, { root: path.join(webDist, "cesium"), prefix: "/cesium/", decorateReply: false });
     app.get("/", (_request, reply) => reply.sendFile("index.html", webDist));
     app.setNotFoundHandler((request, reply) => request.url.startsWith("/api/") ? reply.code(404).send({ error: "接口不存在" }) : reply.sendFile("index.html", webDist));
   } catch { app.log.info("web dist not found; API-only mode"); }
@@ -538,25 +412,49 @@ function parseAholoFormat(value: string): "esz" | "ply-reference" | null {
   return value === "esz" || value === "ply-reference" ? value : null;
 }
 
-async function reconcileVisualRevisionFields(db: Database) {
+async function reconcileAholoRevisionFields(db: Database) {
   for (const dataset of db.listDatasets()) {
-    await pruneExpiredVisualRevisions(path.join(config.publishedDir, dataset.id));
-    const manifest = await readArtifactManifest(path.join(config.publishedDir, dataset.id));
-    if (!manifest) continue;
-    const active = manifest.visualRevisions.find(value => value.revision === manifest.activeVisualRevision);
-    if (!active) throw new Error(`数据集 ${dataset.id} 的 artifact manifest 缺少活动视觉 revision`);
-    if (dataset.activeVisualRevision !== active.revision || dataset.lodPolicyVersion !== active.policyVersion) {
-      db.updateDataset(dataset.id, { activeVisualRevision: active.revision, lodPolicyVersion: active.policyVersion });
-    }
-    const aholoManifest = await readAholoManifest(path.join(config.publishedDir, dataset.id));
-    if (aholoManifest) {
-      const aholoActive = aholoManifest.revisions.find(value => value.revision === aholoManifest.activeRevision);
-      if (!aholoActive) throw new Error(`数据集 ${dataset.id} 的 AHoLo manifest 缺少活动 revision`);
-      if (dataset.aholoVisualRevision !== aholoActive.revision || dataset.aholoPolicyVersion !== aholoActive.policyVersion) {
-        db.updateDataset(dataset.id, { aholoVisualRevision: aholoActive.revision, aholoPolicyVersion: aholoActive.policyVersion });
+    const datasetRoot = path.join(config.publishedDir, dataset.id);
+    const aholoManifest = await readAholoManifest(datasetRoot);
+    if (!aholoManifest) {
+      if (dataset.sourceCoordinateSystem === null && await legacySourceIsAuditedZUp(datasetRoot)) {
+        db.updateDataset(dataset.id, { sourceCoordinateSystem: "z_up" });
       }
+      continue;
+    }
+    const aholoActive = aholoManifest.revisions.find(value => value.revision === aholoManifest.activeRevision);
+    if (!aholoActive) throw new Error(`数据集 ${dataset.id} 的 AHoLo manifest 缺少活动 revision`);
+    const aholoReport = await readAholoReport(datasetRoot, aholoActive);
+    if (aholoReport.source.coordinateSystem !== "tile_local_z_up") {
+      throw new Error(`数据集 ${dataset.id} 的 AHoLo report 缺少 tile_local_z_up 坐标审计`);
+    }
+    if (dataset.aholoVisualRevision !== aholoActive.revision || dataset.aholoPolicyVersion !== aholoActive.policyVersion || dataset.sourceCoordinateSystem !== "z_up") {
+      db.updateDataset(dataset.id, {
+        sourceCoordinateSystem: "z_up",
+        aholoVisualRevision: aholoActive.revision,
+        aholoPolicyVersion: aholoActive.policyVersion
+      });
     }
   }
+}
+
+async function legacySourceIsAuditedZUp(datasetRoot: string) {
+  const candidates = [path.join(datasetRoot, "tiles", "build_summary.json")];
+  try {
+    const manifest = JSON.parse(await readFile(path.join(datasetRoot, "artifact-manifest.json"), "utf8")) as {
+      activeVisualRevision?: unknown;
+      visualRevisions?: Array<{ revision?: unknown; relativeTilesPath?: unknown }>;
+    };
+    const active = manifest.visualRevisions?.find(value => value.revision === manifest.activeVisualRevision);
+    if (typeof active?.relativeTilesPath === "string") candidates.unshift(path.join(datasetRoot, active.relativeTilesPath, "build_summary.json"));
+  } catch { /* Legacy layouts may not have a revision manifest. */ }
+  for (const filename of candidates) {
+    try {
+      const summary = JSON.parse(await readFile(filename, "utf8")) as { source_coordinate_system?: unknown };
+      if (summary.source_coordinate_system === "z_up") return true;
+    } catch { /* Try the next known legacy location. */ }
+  }
+  return false;
 }
 
 function invalidateMissionsUsingLabel(db: Database, datasetId: string, labelId: string) {

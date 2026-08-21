@@ -1,4 +1,4 @@
-import type { ApiError, CreateDataset, CreateLabel, CreateMission, Dataset, InspectionLabel, LodReport, Mission, RaycastRequest, RenderManifest, SurfaceHit } from "@spikive/shared";
+import type { ApiError, CreateDataset, CreateLabel, CreateMission, Dataset, InspectionLabel, Mission, RaycastRequest, RenderManifest, SurfaceHit } from "@spikive/shared";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -21,19 +21,8 @@ export const api = {
   createDataset: (value: CreateDataset) => request<Dataset>("/api/datasets", { method: "POST", body: JSON.stringify(value) }),
   updateDataset: (id: string, value: { voxelSize: number }) => request<Dataset>(`/api/datasets/${id}`, { method: "PATCH", body: JSON.stringify(value) }),
   retryDataset: (id: string) => request<Dataset>(`/api/datasets/${id}/retry`, { method: "POST" }),
-  rebuildDatasetTiles: (id: string) => request<Dataset>(`/api/datasets/${id}/rebuild-tiles`, { method: "POST" }),
   rebuildDatasetVisuals: (id: string) => request<Dataset>(`/api/datasets/${id}/rebuild-visuals`, { method: "POST" }),
-  renderManifest: (id: string, backend?: Dataset["visualBackend"], signal?: AbortSignal) => request<RenderManifest>(
-    `/api/datasets/${id}/render-manifest${backend ? `?backend=${encodeURIComponent(backend)}` : ""}`,
-    { signal }
-  ),
-  setRenderBackend: (id: string, visualBackend: Dataset["visualBackend"]) => request<Dataset>(
-    `/api/datasets/${id}/render-backend`, { method: "POST", body: JSON.stringify({ visualBackend }) }
-  ),
-  datasetLodReport: (id: string) => request<LodReport>(`/api/datasets/${id}/lod-report`),
-  activateDatasetVisualRevision: (id: string, revision: string) => request<Dataset>(
-    `/api/datasets/${id}/visual-revisions/${encodeURIComponent(revision)}/activate`, { method: "POST" }
-  ),
+  renderManifest: (id: string, signal?: AbortSignal) => request<RenderManifest>(`/api/datasets/${id}/render-manifest`, { signal }),
   deleteDataset: (id: string) => request<void>(`/api/datasets/${id}`, { method: "DELETE" }),
   raycastDataset: (id: string, value: RaycastRequest, signal?: AbortSignal) => request<SurfaceHit | null>(`/api/datasets/${id}/raycast`, { method: "POST", body: JSON.stringify(value), signal }),
   labels: (datasetId: string) => request<InspectionLabel[]>(`/api/datasets/${datasetId}/labels`),

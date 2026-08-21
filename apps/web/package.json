@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "predev": "node ../../scripts/patch-cesium-gs-reveal.mjs && node ../../scripts/check-rendering-architecture.mjs",
+    "predev": "node ../../scripts/check-rendering-architecture.mjs",
     "dev": "vite",
-    "prebuild": "node ../../scripts/patch-cesium-gs-reveal.mjs && node ../../scripts/check-rendering-architecture.mjs",
-    "build": "tsc -p tsconfig.json --noEmit && vite build && node ../../scripts/copy-cesium.mjs",
-    "pretypecheck": "node ../../scripts/patch-cesium-gs-reveal.mjs && node ../../scripts/check-rendering-architecture.mjs",
+    "prebuild": "node ../../scripts/check-rendering-architecture.mjs",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "pretypecheck": "node ../../scripts/check-rendering-architecture.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
     "test": "vitest run src",
     "clean": "rm -rf dist"
@@ -16,7 +16,6 @@
   "dependencies": {
     "@manycore/aholo-viewer": "1.8.1",
     "@spikive/shared": "0.1.0",
-    "cesium": "1.143.0",
     "react": "19.1.1",
     "react-dom": "19.1.1",
     "tus-js-client": "4.3.1"

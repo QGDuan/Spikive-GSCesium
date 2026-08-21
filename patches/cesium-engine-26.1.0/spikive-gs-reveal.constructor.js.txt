@@ -1,7 +1,0 @@
-  // Public extension seam owned by Spikive. The application writes reveal
-  // uniforms to the tileset and never reaches into this private primitive.
-  this._tileset.spikiveGaussianSplatRevealSupported = 1;
-  this._tileset.spikiveGaussianSplatRevealPatchVersion = 6;
-  this._tileset.spikiveGaussianSplatRevealShaderActive = false;
-  this._spikiveRevealShaderEnabled = false;
-  this._spikiveRetiredDrawResources = [];

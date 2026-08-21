@@ -11,14 +11,12 @@ interface DatasetPanelProps {
   onCreated(id: string): void;
   onClearView(): void;
   onRetry(id: string, voxelSize: number): Promise<void>;
-  onRebuild(id: string): Promise<void>;
   onBuildAholo(id: string): Promise<void>;
-  onSwitchRenderer(id: string, backend: Dataset["visualBackend"]): Promise<void>;
   onDelete(id: string): void;
   onMessage(value: string): void;
 }
 
-export function DatasetPanel({ datasets, selectedId, onSelect, onFocus, onCreated, onClearView, onRetry, onRebuild, onBuildAholo, onSwitchRenderer, onDelete, onMessage }: DatasetPanelProps) {
+export function DatasetPanel({ datasets, selectedId, onSelect, onFocus, onCreated, onClearView, onRetry, onBuildAholo, onDelete, onMessage }: DatasetPanelProps) {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [retryingId, setRetryingId] = useState<string | null>(null);
@@ -45,6 +43,7 @@ export function DatasetPanel({ datasets, selectedId, onSelect, onFocus, onCreate
         sourceSize: file.size,
         sceneType,
         inputConvention: "graphdeco",
+        sourceCoordinateSystem: "z_up",
         voxelSize: Number(form.get("voxelSize")),
         voxelOpacity: 0.1,
         indoorSeed: sceneType === "indoor"
@@ -63,7 +62,7 @@ export function DatasetPanel({ datasets, selectedId, onSelect, onFocus, onCreate
       onCreated(createdDataset.id);
       onMessage("数据集已创建，正在断点上传");
       await uploadPly(file, createdDataset.id, setProgress);
-      onMessage("上传完成，后台开始生成 3D Tiles 和碰撞体");
+      onMessage("上传完成，后台开始生成碰撞体和 AHoLo Chunk LOD");
     } catch (error) {
       if (createdDataset) await api.deleteDataset(createdDataset.id).catch(() => undefined);
       onMessage(`上传失败，已清理未完成记录：${errorMessage(error)}`);
@@ -145,32 +144,11 @@ export function DatasetPanel({ datasets, selectedId, onSelect, onFocus, onCreate
         onClick={() => {
           if (!selectedId) return;
           setRebuildingId(selectedId);
-          void onRebuild(selectedId)
-            .catch(error => onMessage(`高清切片重建失败：${errorMessage(error)}`))
-            .finally(() => setRebuildingId(null));
-        }}
-      >{rebuildingId === selectedId ? "已排队…" : "重建高清切片"}</button>
-      <button
-        type="button"
-        className="secondary"
-        disabled={selectedDataset?.status !== "ready" || rebuildingId === selectedId}
-        onClick={() => {
-          if (!selectedId) return;
-          setRebuildingId(selectedId);
           void onBuildAholo(selectedId)
-            .catch(error => onMessage(`AHoLo 候选构建失败：${errorMessage(error)}`))
+            .catch(error => onMessage(`AHoLo 视觉构建失败：${errorMessage(error)}`))
             .finally(() => setRebuildingId(null));
         }}
-      >构建 AHoLo 候选</button>
-      <button
-        type="button"
-        className="secondary"
-        disabled={!selectedDataset || selectedDataset.status !== "ready" || (!selectedDataset.aholoVisualRevision && selectedDataset.visualBackend === "cesium-3dtiles")}
-        onClick={() => selectedDataset && void onSwitchRenderer(
-          selectedDataset.id,
-          selectedDataset.visualBackend === "cesium-3dtiles" ? "aholo-chunk-lod" : "cesium-3dtiles"
-        ).catch(error => onMessage(`Renderer 切换失败：${errorMessage(error)}`))}
-      >{selectedDataset?.visualBackend === "aholo-chunk-lod" ? "回滚 Cesium" : "启用 AHoLo"}</button>
+      >{rebuildingId === selectedId ? "已排队…" : selectedDataset?.aholoVisualRevision ? "重建 AHoLo 视觉" : "构建 AHoLo 视觉"}</button>
       <button type="button" className="danger" disabled={!selectedId || uploading} onClick={() => selectedId && onDelete(selectedId)}>永久删除所选模型</button>
     </div>
   </>;
@@ -194,7 +172,7 @@ const statusLabel = (status: Dataset["status"]) => ({
   created: "待上传",
   uploading: "上传中",
   queued: "排队",
-  tiling: "切片中",
+  tiling: "AHoLo 切片中",
   collision_processing: "碰撞处理中",
   rebuilding: "高清重建中",
   ready: "已就绪",

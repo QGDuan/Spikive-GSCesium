@@ -159,12 +159,12 @@ export function AholoScene(props: AholoSceneProps) {
   const [pickProbe, setPickProbe] = useState<PickProbe | null>(null);
   const [runtimeConfig, setRuntimeConfig] = useState<AholoRuntimeConfig>({ ...DEFAULT_AHOLO_RUNTIME_CONFIG });
   const datasetId = props.dataset?.id ?? null;
-  const candidateRevision = props.dataset?.aholoVisualRevision ?? null;
+  const visualRevision = props.dataset?.aholoVisualRevision ?? null;
 
   useEffect(() => {
     const container = containerRef.current;
     const labelLayer = labelLayerRef.current;
-    if (!container || !labelLayer || !datasetId || !candidateRevision) return;
+    if (!container || !labelLayer || !datasetId || !visualRevision) return;
     const controller = new AbortController();
     let runtime: SceneRuntime | null = null;
     let disposed = false;
@@ -203,7 +203,7 @@ export function AholoScene(props: AholoSceneProps) {
     };
     // The revision is immutable; overlay and interaction changes are handled below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [datasetId, candidateRevision, props.referenceFormat]);
+  }, [datasetId, visualRevision, props.referenceFormat]);
 
   useEffect(() => runtimeRef.current?.setInteraction(props.labelMode), [props.labelMode]);
   useEffect(() => {
@@ -218,7 +218,7 @@ export function AholoScene(props: AholoSceneProps) {
   }, [datasetId, props.focusRequest]);
 
   if (!props.dataset) return <div className="scene-empty">选择一个 GS 数据集</div>;
-  if (!candidateRevision) return <div className="scene-empty">该场景尚未构建 AHoLo 候选视觉，请先执行“构建 AHoLo 候选”</div>;
+  if (!visualRevision) return <div className="scene-empty">该场景尚未构建 AHoLo 视觉，请先执行“构建 AHoLo 视觉”</div>;
   return <div className={`aholo-scene ${props.labelMode ? "picking" : ""}`}>
     <div ref={containerRef} className="aholo-canvas" />
     <div ref={labelLayerRef} className="aholo-label-layer" />
@@ -448,7 +448,7 @@ class SceneRuntime {
     };
     const onContextLost = (event: Event) => {
       event.preventDefault();
-      this.onFatal("AHoLo WebGL 上下文已丢失；候选 Renderer 已停止，请回滚 Cesium");
+      this.onFatal("AHoLo WebGL 上下文已丢失，请重新加载场景");
       this.destroy();
     };
     this.container.addEventListener("pointerdown", onPointerDown);
@@ -639,9 +639,8 @@ async function createSceneRuntime(options: {
   onDiagnostics: (value: Diagnostics) => void;
   onFatal: (message: string) => void;
 }) {
-  const manifest = await api.renderManifest(options.datasetId, "aholo-chunk-lod", options.signal);
+  const manifest = await api.renderManifest(options.datasetId, options.signal);
   options.signal.throwIfAborted();
-  if (!manifest.aholo) throw new Error("render-manifest 缺少 AHoLo 资源");
   const metaUrl = options.referenceFormat ? manifest.aholo.referenceLodMetaUrl : manifest.aholo.lodMetaUrl;
   const response = await fetch(metaUrl, { signal: options.signal, cache: "no-store" });
   if (!response.ok) throw new Error(`LOD meta HTTP ${response.status}`);

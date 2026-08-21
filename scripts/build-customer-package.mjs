@@ -66,8 +66,6 @@ const copyEntries = [
   ["apps/web/dist", "apps/web/dist"],
   ["packages/shared/package.json", "packages/shared/package.json"],
   ["packages/shared/dist", "packages/shared/dist"],
-  ["scripts/patch-cesium-gs-reveal.mjs", "scripts/patch-cesium-gs-reveal.mjs"],
-  ["patches", "patches"],
   ["docs/CUSTOMER_GUIDE.md", "USER_GUIDE.md"],
   ["docs/THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"],
   [targetConfig.readme, "README.md"],

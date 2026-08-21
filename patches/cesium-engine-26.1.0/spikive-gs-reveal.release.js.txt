@@ -1,1 +1,0 @@
-  releaseSpikiveGaussianDrawResources(this, frameState.frameNumber);

@@ -61,9 +61,7 @@ describe("voxel collision reader", () => {
   it("deduplicates concurrent loads and evicts least-recently-used worlds by byte budget", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "spikive-collision-cache-"));
     const prepare = async (id: string) => {
-      await mkdir(path.join(directory, id, "tiles"), { recursive: true });
       await mkdir(path.join(directory, id, "collision"), { recursive: true });
-      await writeFile(path.join(directory, id, "tiles", "build_summary.json"), JSON.stringify({ source_coordinate_system: "z_up" }));
       await writeFile(path.join(directory, id, "collision", "scene.voxel.json"), JSON.stringify({ ...metadata, coordinateFrame: "tile_local_z_up" }));
       await writeFile(path.join(directory, id, "collision", "scene.voxel.bin"), Buffer.from(new Uint32Array([0xff000000]).buffer));
     };
@@ -75,6 +73,21 @@ describe("voxel collision reader", () => {
       expect(repository.stats).toEqual({ entries: 1, bytes: 4, maximumBytes: 4 });
       await repository.get("second");
       expect(repository.stats).toEqual({ entries: 1, bytes: 4, maximumBytes: 4 });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("loads a frozen collision artifact through its legacy coordinate summary", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "spikive-collision-legacy-"));
+    try {
+      await mkdir(path.join(directory, "legacy", "tiles"), { recursive: true });
+      await mkdir(path.join(directory, "legacy", "collision"), { recursive: true });
+      await writeFile(path.join(directory, "legacy", "tiles", "build_summary.json"), JSON.stringify({ source_coordinate_system: "z_up" }));
+      await writeFile(path.join(directory, "legacy", "collision", "scene.voxel.json"), JSON.stringify(metadata));
+      await writeFile(path.join(directory, "legacy", "collision", "scene.voxel.bin"), Buffer.from(new Uint32Array([0xff000000]).buffer));
+      const world = await new CollisionRepository(directory).get("legacy");
+      expect(world.isOccupied({ x: -1, y: -1, z: 1 })).toBe(true);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

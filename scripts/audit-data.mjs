@@ -59,7 +59,9 @@ try {
     addFinding("FOREIGN_KEY", JSON.stringify(row));
   }
 
-  const datasets = db.prepare("SELECT id, status, collision_status, active_visual_revision, lod_policy_version, visual_backend, aholo_visual_revision, aholo_policy_version, visual_build_target FROM datasets").all();
+  const datasetColumns = new Set(db.prepare("PRAGMA table_info(datasets)").all().map(row => String(row.name)));
+  const sourceCoordinateColumn = datasetColumns.has("source_coordinate_system") ? "source_coordinate_system" : "NULL AS source_coordinate_system";
+  const datasets = db.prepare(`SELECT id, status, collision_status, ${sourceCoordinateColumn}, aholo_visual_revision, aholo_policy_version FROM datasets`).all();
   const labels = db.prepare("SELECT id, dataset_id FROM labels").all();
   const missions = db.prepare("SELECT id, dataset_id, start_label_id, label_ids, status FROM missions").all();
   const waypoints = db.prepare(`
@@ -138,47 +140,6 @@ try {
         if (!(await exists(artifact))) addFinding("MISSING_ARTIFACT", `数据集 ${datasetId} 缺少 ${parts.join("/")}`);
       }
       const datasetRoot = path.join(dataDir, "published", datasetId);
-      const manifestPath = path.join(datasetRoot, "artifact-manifest.json");
-      if (await exists(manifestPath)) {
-        try {
-          const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-          const active = Array.isArray(manifest.visualRevisions)
-            ? manifest.visualRevisions.find(value => value?.revision === manifest.activeVisualRevision)
-            : null;
-          if (!active || typeof active.relativeTilesPath !== "string") {
-            addFinding("INVALID_VISUAL_MANIFEST", `数据集 ${datasetId} 的活动视觉 revision 无效`);
-          } else {
-            const manifestRevisionIds = new Set(manifest.visualRevisions.map(value => String(value.revision)));
-            if (String(dataset.active_visual_revision ?? "") !== String(active.revision)) {
-              addFinding("VISUAL_REVISION_MISMATCH", `数据集 ${datasetId} 的数据库活动 revision 与 manifest 不一致`);
-            }
-            if (String(dataset.lod_policy_version ?? "") !== String(active.policyVersion ?? "")) {
-              addFinding("LOD_POLICY_MISMATCH", `数据集 ${datasetId} 的数据库 LOD 策略与 manifest 不一致`);
-            }
-            for (const name of ["tileset.json", "build_summary.json"]) {
-              if (!(await exists(path.join(datasetRoot, active.relativeTilesPath, name)))) {
-                addFinding("MISSING_VISUAL_ARTIFACT", `数据集 ${datasetId} 的活动视觉 revision 缺少 ${name}`);
-              }
-            }
-            if (active.lodReportPath && !(await exists(path.join(datasetRoot, active.lodReportPath)))) {
-              addFinding("MISSING_LOD_REPORT", `数据集 ${datasetId} 的活动视觉 revision 缺少 LOD 报告`);
-            }
-            for (const entry of await listChildren(path.join(datasetRoot, "visual-revisions"))) {
-              if (entry.isDirectory() && !manifestRevisionIds.has(entry.name)) {
-                addFinding("ORPHAN_VISUAL_REVISION", `数据集 ${datasetId} 的 visual-revisions/${entry.name} 不在 manifest 中`);
-              }
-            }
-          }
-        } catch (error) {
-          addFinding("INVALID_VISUAL_MANIFEST", `数据集 ${datasetId} 的 artifact manifest 无法读取：${String(error)}`);
-        }
-      } else {
-        for (const name of ["tileset.json", "build_summary.json"]) {
-          if (!(await exists(path.join(datasetRoot, "tiles", name)))) {
-            addFinding("MISSING_ARTIFACT", `数据集 ${datasetId} 缺少 legacy tiles/${name}`);
-          }
-        }
-      }
       const aholoManifestPath = path.join(datasetRoot, "aholo-artifact-manifest.json");
       if (await exists(aholoManifestPath)) {
         try {
@@ -210,15 +171,10 @@ try {
         } catch (error) {
           addFinding("INVALID_AHOLO_MANIFEST", `数据集 ${datasetId} 的 AHoLo manifest 无法读取：${String(error)}`);
         }
-      } else if (dataset.aholo_visual_revision != null || String(dataset.visual_backend) === "aholo-chunk-lod") {
-        addFinding("MISSING_AHOLO_MANIFEST", `数据集 ${datasetId} 声明 AHoLo revision/后端但缺少 manifest`);
+      } else if (status === "ready" || dataset.aholo_visual_revision != null) {
+        addFinding("MISSING_AHOLO_MANIFEST", `数据集 ${datasetId} 已就绪但缺少 AHoLo manifest`);
       }
-      if (!["cesium-3dtiles", "aholo-chunk-lod"].includes(String(dataset.visual_backend))) {
-        addFinding("INVALID_VISUAL_BACKEND", `数据集 ${datasetId} 的 visual_backend 无效`);
-      }
-      if (dataset.visual_build_target != null && !["cesium-3dtiles", "aholo-chunk-lod"].includes(String(dataset.visual_build_target))) {
-        addFinding("INVALID_VISUAL_BUILD_TARGET", `数据集 ${datasetId} 的 visual_build_target 无效`);
-      }
+      if (dataset.source_coordinate_system !== "z_up") addFinding("UNKNOWN_SOURCE_BASIS", `数据集 ${datasetId} 未记录 z_up 源坐标约定`);
     }
   }
 

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dataset, InspectionLabel, Mission, SurfaceHit } from "@spikive/shared";
 import { api } from "./api";
-import { CesiumScene } from "./CesiumScene";
 import { AholoScene } from "./AholoScene";
 import { DatasetPanel } from "./components/DatasetPanel";
 import { InspectionLabelPopup } from "./components/InspectionLabelPopup";
@@ -34,7 +33,7 @@ export default function App() {
   const dataset = datasets.find(value => value.id === selectedId) ?? null;
   const selectedLabel = labels.find(value => value.id === selectedLabelId && value.datasetId === selectedId) ?? null;
 
-  useEffect(() => setAholoRuntimeFailed(false), [dataset?.id, dataset?.visualBackend, dataset?.aholoVisualRevision]);
+  useEffect(() => setAholoRuntimeFailed(false), [dataset?.id, dataset?.aholoVisualRevision]);
   useEffect(() => {
     setSelectedLabelId(current => current && labels.some(label => label.id === current && label.datasetId === selectedId) ? current : null);
   }, [labels, selectedId]);
@@ -146,7 +145,7 @@ export default function App() {
 
   const deleteDataset = useCallback(async (id: string) => {
     const target = datasets.find(value => value.id === id);
-    if (!target || !window.confirm(`永久删除“${target.name}”？\n\nPLY、3D Tiles、碰撞数据、巡检标签和全部航迹任务都会被删除，且无法恢复。`)) return;
+    if (!target || !window.confirm(`永久删除“${target.name}”？\n\nPLY、AHoLo 视觉、碰撞数据、巡检标签和全部航迹任务都会被删除，且无法恢复。`)) return;
     try {
       await api.deleteDataset(id);
       if (selectedId === id) {
@@ -172,31 +171,12 @@ export default function App() {
     setMessage(`已按人工确认的 ${voxelSize} m 体素尺寸重新排队`);
   }, [refreshDatasets]);
 
-  const rebuildDatasetTiles = useCallback(async (id: string) => {
-    const target = datasets.find(value => value.id === id);
-    if (!target || !window.confirm(`按平台固定高清策略重建“${target.name}”的 Gaussian 3D Tiles？\n\n旧模型会继续服务；碰撞数据、标签和航迹不会重算或改变。完成后场景会自动加载新切片。`)) return;
-    await api.rebuildDatasetTiles(id);
-    await refreshDatasets();
-    setMessage(`“${target.name}”已开始高清 LOD 重建；当前已发布版本继续可用`);
-  }, [datasets, refreshDatasets]);
-
   const buildAholoVisuals = useCallback(async (id: string) => {
     const target = datasets.find(value => value.id === id);
-    if (!target || !window.confirm(`为“${target.name}”构建独立 AHoLo Chunk LOD 候选？\n\n将串行生成高精度 ESZ 和一次无损 PLY 对照；生产 Cesium、碰撞、标签和航迹不会改变。`)) return;
+    if (!target || !window.confirm(`为“${target.name}”${target.aholoVisualRevision ? "重建" : "构建"} AHoLo Chunk LOD？\n\n将串行生成高精度 ESZ 和无损 PLY 对照；碰撞、标签和航迹不会改变。`)) return;
     await api.rebuildDatasetVisuals(id);
     await refreshDatasets();
-    setMessage(`“${target.name}”已开始构建 AHoLo 候选；可继续使用当前生产视图`);
-  }, [datasets, refreshDatasets]);
-
-  const switchRenderer = useCallback(async (id: string, backend: Dataset["visualBackend"]) => {
-    const target = datasets.find(value => value.id === id);
-    if (!target) return;
-    if (!window.confirm(backend === "aholo-chunk-lod"
-      ? `将“${target.name}”的本地巡检视图切换到 AHoLo？\n\n请先在 /renderer-lab 完成画质和生命周期验收；仍可一键回滚 Cesium。`
-      : `将“${target.name}”回滚到 Cesium 本地巡检视图？`)) return;
-    await api.setRenderBackend(id, backend);
-    await refreshDatasets();
-    setMessage(backend === "aholo-chunk-lod" ? "已切换到 AHoLo 单 Renderer" : "已回滚到 Cesium 单 Renderer");
+    setMessage(`“${target.name}”已开始${target.aholoVisualRevision ? "重建" : "构建"} AHoLo 视觉`);
   }, [datasets, refreshDatasets]);
 
   const deleteMission = useCallback(async (id: string) => {
@@ -246,9 +226,7 @@ export default function App() {
           }}
           onClearView={clearModelView}
           onRetry={retryDataset}
-          onRebuild={rebuildDatasetTiles}
           onBuildAholo={buildAholoVisuals}
-          onSwitchRenderer={switchRenderer}
           onDelete={id => void deleteDataset(id)}
           onMessage={setMessage}
         />}
@@ -278,7 +256,7 @@ export default function App() {
       </section>
     </aside>
     <main>
-      {dataset?.visualBackend === "aholo-chunk-lod" && !aholoRuntimeFailed
+      {!aholoRuntimeFailed
         ? <AholoScene
             dataset={dataset}
             labels={labels}
@@ -290,20 +268,12 @@ export default function App() {
             onPickLabel={onPickLabel}
             onSelectLabel={selectInspectionLabel}
             onMessage={setMessage}
-            onFatal={reason => { setAholoRuntimeFailed(true); setMessage(`AHoLo 已有界停止，当前会话回退 Cesium：${reason}`); }}
+            onFatal={reason => { setAholoRuntimeFailed(true); setMessage(`AHoLo 已有界停止：${reason}`); }}
           />
-        : <CesiumScene
-            dataset={dataset}
-            labels={labels}
-            mission={activeMission}
-            labelMode={labelMode}
-            pendingPick={pendingPick}
-            selectedLabelId={selectedLabelId}
-            focusRequest={focusRequest}
-            onPickLabel={onPickLabel}
-            onSelectLabel={selectInspectionLabel}
-            onMessage={setMessage}
-          />}
+        : <div className="scene-empty scene-error">
+            <span>AHoLo 渲染已停止，业务数据未受影响。</span>
+            <button type="button" className="secondary" onClick={() => setAholoRuntimeFailed(false)}>重新加载 AHoLo</button>
+          </div>}
       <div className="legend">
         <span><i className="orange" />GS 巡检标签</span>
         <span><i className="red" />标签航迹点</span>
