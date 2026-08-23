@@ -128,7 +128,7 @@ const start = async () => {
 
   const pointCloud = new Asset('point_cloud', 'gsplat', { url: POINT_CLOUD_URL });
 
-  setStatus('正在加载官方 Streamed SOG（LOD0–3，按需流式请求）…');
+  setStatus('正在加载官方 Streamed SOG（LOD0–6，按需流式请求）…');
   pendingLoad = loadAssets([pointCloud], app);
   await pendingLoad.promise;
   pendingLoad = undefined;

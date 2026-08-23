@@ -8,6 +8,14 @@ const source = resolve(projectRoot, 'public/data/point_cloud.ply');
 const output = resolve(projectRoot, 'public/data/point_cloud-lod/lod-meta.json');
 const outputDirectory = dirname(output);
 const workRoot = resolve(projectRoot, 'var/lod-build');
+const lodLevels = [
+  { lod: 1, ratio: '90%' },
+  { lod: 2, ratio: '75%' },
+  { lod: 3, ratio: '60%' },
+  { lod: 4, ratio: '40%' },
+  { lod: 5, ratio: '20%' },
+  { lod: 6, ratio: '10%' }
+];
 const executable = resolve(
   projectRoot,
   'node_modules/.bin',
@@ -27,9 +35,11 @@ try {
 
 await mkdir(workRoot, { recursive: true });
 const workDirectory = await mkdtemp(join(workRoot, 'official-'));
-const lod1 = join(workDirectory, 'lod1.ply');
-const lod2 = join(workDirectory, 'lod2.ply');
-const lod3 = join(workDirectory, 'lod3.ply');
+const lodSources = lodLevels.map(({ lod, ratio }) => ({
+  lod,
+  ratio,
+  path: join(workDirectory, `lod${lod}.ply`)
+}));
 
 const run = (args) =>
   new Promise((resolveRun, rejectRun) => {
@@ -52,25 +62,16 @@ const run = (args) =>
 let completed = false;
 
 try {
-  await run([source, '--decimate', '50%', lod1]);
-  await run([source, '--decimate', '25%', lod2]);
-  await run([source, '--decimate', '10%', lod3]);
+  for (const level of lodSources) {
+    await run([source, '--decimate', level.ratio, level.path]);
+  }
   await mkdir(outputDirectory, { recursive: false });
-  await run([
-    source,
-    '--tag-lod',
-    '0',
-    lod1,
-    '--tag-lod',
-    '1',
-    lod2,
-    '--tag-lod',
-    '2',
-    lod3,
-    '--tag-lod',
-    '3',
-    output
-  ]);
+  const tagArguments = [source, '--tag-lod', '0'];
+  for (const level of lodSources) {
+    tagArguments.push(level.path, '--tag-lod', String(level.lod));
+  }
+  tagArguments.push(output);
+  await run(tagArguments);
   completed = true;
 } finally {
   if (completed) {
