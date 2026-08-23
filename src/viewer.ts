@@ -3,10 +3,13 @@ import {
   AppOptions,
   Asset,
   AssetListLoader,
+  BLEND_NORMAL,
   CanvasFont,
   CameraComponentSystem,
   Color,
   ContainerHandler,
+  ContainerResource,
+  CULLFACE_NONE,
   DEVICETYPE_WEBGPU,
   ELEMENTTYPE_TEXT,
   ElementComponentSystem,
@@ -20,6 +23,7 @@ import {
   Picker,
   Quat,
   RESOLUTION_AUTO,
+  RenderComponent,
   RenderComponentSystem,
   ScreenComponentSystem,
   ScriptComponentSystem,
@@ -48,11 +52,19 @@ export interface RendererMetrics {
 }
 
 interface LoadedScene {
+  root: Entity;
   entity: Entity;
   asset: Asset;
   url: string;
   markerSize: number;
   markers: InspectionMarker[];
+  voxelDebug?: VoxelDebugOverlay;
+}
+
+interface VoxelDebugOverlay {
+  asset: Asset;
+  entity: Entity;
+  url: string;
 }
 
 interface InspectionMarker {
@@ -95,7 +107,7 @@ const loadAsset = (asset: Asset, app: AppBase) => {
       settled = true;
       loader.destroy();
       if (error) {
-        reject(new Error(`GS 资源加载失败：${failed?.map((item) => item.name).join(', ') || asset.name}`));
+        reject(new Error(`资源加载失败：${failed?.map((item) => item.name).join(', ') || asset.name}`));
         return;
       }
       resolve();
@@ -116,10 +128,12 @@ export class GsViewer {
   private inspectionMaterial?: StandardMaterial;
   private inspectionSelectedMaterial?: StandardMaterial;
   private inspectionNormalMaterial?: StandardMaterial;
+  private voxelDebugMaterial?: StandardMaterial;
   private current?: LoadedScene;
   private selectedInspectionPointId = '';
   private activeLoads = 0;
   private generation = 0;
+  private voxelDebugGeneration = 0;
   private disposed = false;
   private pickerBusy = false;
   private circleTrimFrame = 0;
@@ -196,6 +210,7 @@ export class GsViewer {
     this.inspectionMaterial = this.createInspectionMaterial('inspection-point-red', new Color(1, 0.025, 0.015));
     this.inspectionSelectedMaterial = this.createInspectionMaterial('inspection-point-selected', new Color(0.02, 0.34, 1));
     this.inspectionNormalMaterial = this.createInspectionMaterial('inspection-normal-orange', new Color(1, 0.32, 0.025));
+    this.voxelDebugMaterial = this.createVoxelDebugMaterial();
 
     this.camera = new Entity('camera');
     this.camera.addComponent('camera', {
@@ -247,6 +262,7 @@ export class GsViewer {
 
     const generation = ++this.generation;
     const asset = new Asset(name, 'gsplat', { url });
+    let root: Entity | undefined;
     let entity: Entity | undefined;
     this.activeLoads += 1;
     try {
@@ -257,15 +273,21 @@ export class GsViewer {
         return;
       }
 
+      root = new Entity(`scene-root-${name}`);
+      // The root owns the common source-local Z-up -> PlayCanvas Y-up transform.
+      // GS, debug voxels and business annotations are independent children so their
+      // visibility can be toggled without losing coordinate alignment.
+      root.setLocalEulerAngles(-90, 0, 0);
+      app.root.addChild(root);
+
       entity = new Entity(`gs-${name}`);
       entity.addComponent('gsplat', { asset });
-      // All source data remains in its local Z-up metric engineering coordinate system.
-      entity.setLocalEulerAngles(-90, 0, 0);
-      app.root.addChild(entity);
+      root.addChild(entity);
       await nextFrame();
 
       if (this.disposed || generation !== this.generation) {
-        entity.destroy();
+        root.destroy();
+        root = undefined;
         entity = undefined;
         asset.unload();
         app.assets.remove(asset);
@@ -276,8 +298,8 @@ export class GsViewer {
         throw new Error('SOG 已加载，但 PlayCanvas 未生成 Gaussian 包围盒。');
       }
 
-      const worldCenter = entity.getWorldTransform().transformPoint(bounds.center, new Vec3());
-      entity.setLocalPosition(-worldCenter.x, -worldCenter.y, -worldCenter.z);
+      const worldCenter = root.getWorldTransform().transformPoint(bounds.center, new Vec3());
+      root.setLocalPosition(-worldCenter.x, -worldCenter.y, -worldCenter.z);
       const diagonal = Math.max(bounds.halfExtents.length() * 2, 1);
       const position = new Vec3(0, diagonal * 0.15, diagonal * 0.9);
       this.camera!.camera!.nearClip = Math.max(diagonal / 10_000, 0.01);
@@ -287,19 +309,107 @@ export class GsViewer {
       const previous = this.current;
       this.circleSelector?.clearResidentResources();
       this.current = {
+        root,
         entity,
         asset,
         url,
         markerSize: Math.max(0.25, Math.min(1.2, diagonal * 0.001)),
         markers: []
       };
+      root = undefined;
       entity = undefined;
       if (previous) {
+        this.clearVoxelDebugForScene(previous);
         this.clearInspectionMarkers(previous);
-        previous.entity.destroy();
+        previous.root.destroy();
         previous.asset.unload();
         app.assets.remove(previous.asset);
       }
+    } catch (error) {
+      if (root) root.destroy();
+      else entity?.destroy();
+      asset.unload();
+      app.assets.remove(asset);
+      throw error;
+    } finally {
+      this.activeLoads -= 1;
+      if (this.disposed && this.activeLoads === 0 && !this.pickerBusy) {
+        this.destroyApplication();
+      }
+    }
+  }
+
+  get voxelDebugUrl() {
+    return this.current?.voxelDebug?.url ?? '';
+  }
+
+  get gaussianVisible() {
+    return Boolean(this.current?.entity.enabled);
+  }
+
+  setGaussianVisible(visible: boolean) {
+    if (!this.current || this.disposed) {
+      throw new Error('请先加载对应的 GS 场景。');
+    }
+    this.current.entity.enabled = visible;
+  }
+
+  async toggleVoxelDebug(url: string, name: string) {
+    const app = this.app;
+    const scene = this.current;
+    const material = this.voxelDebugMaterial;
+    if (!app || !scene || !material || this.disposed) {
+      throw new Error('请先加载对应的 GS 场景。');
+    }
+    if (scene.voxelDebug?.url === url) {
+      this.clearVoxelDebug();
+      return false;
+    }
+
+    this.clearVoxelDebug();
+    const voxelGeneration = ++this.voxelDebugGeneration;
+    const sceneGeneration = this.generation;
+    const asset = new Asset(`${name}-voxel-debug`, 'container', { url });
+    let entity: Entity | undefined;
+    this.activeLoads += 1;
+    try {
+      await loadAsset(asset, app);
+      if (this.disposed || voxelGeneration !== this.voxelDebugGeneration ||
+          sceneGeneration !== this.generation || this.current !== scene) {
+        asset.unload();
+        app.assets.remove(asset);
+        return false;
+      }
+
+      const resource = asset.resource as ContainerResource | undefined;
+      if (!resource?.instantiateRenderEntity) {
+        throw new Error('体素调试网格未包含可渲染的 GLB Mesh。');
+      }
+      entity = resource.instantiateRenderEntity({
+        castShadows: false,
+        receiveShadows: false
+      });
+      entity.name = `voxel-debug-${name}`;
+      let meshCount = 0;
+      for (const render of entity.findComponents('render') as RenderComponent[]) {
+        render.castShadows = false;
+        render.receiveShadows = false;
+        for (const meshInstance of render.meshInstances) {
+          meshInstance.material = material;
+          meshInstance.pick = false;
+          meshCount += 1;
+        }
+      }
+      if (meshCount === 0) {
+        throw new Error('体素调试网格为空。');
+      }
+
+      // Collision GLB and SOG use the same local Z-up source coordinates. Parenting the
+      // overlay here applies exactly the same Z-up→PlayCanvas mapping and scene centering.
+      scene.root.addChild(entity);
+      scene.voxelDebug = { asset, entity, url };
+      entity = undefined;
+      return true;
     } catch (error) {
       entity?.destroy();
       asset.unload();
@@ -311,6 +421,11 @@ export class GsViewer {
         this.destroyApplication();
       }
     }
+  }
+
+  clearVoxelDebug() {
+    this.voxelDebugGeneration += 1;
+    if (this.current) this.clearVoxelDebugForScene(this.current);
   }
 
   getMetrics(): RendererMetrics {
@@ -354,7 +469,7 @@ export class GsViewer {
     const worldOrigin = camera.getPosition().clone();
     const maxDistance = camera.camera.farClip;
     const worldTarget = camera.camera.screenToWorld(x, y, maxDistance, new Vec3());
-    const inverse = current.entity.getWorldTransform().clone().invert();
+    const inverse = current.root.getWorldTransform().clone().invert();
     const localOrigin = inverse.transformPoint(worldOrigin, new Vec3());
     const localTarget = inverse.transformPoint(worldTarget, new Vec3());
     const direction = localTarget.sub(localOrigin).normalize();
@@ -386,7 +501,7 @@ export class GsViewer {
         current.markerSize * MARKER_SCALE,
         current.markerSize * MARKER_SCALE
       );
-      current.entity.addChild(mesh);
+      current.root.addChild(mesh);
 
       let normalLine: Entity | undefined;
       let normalDirection: Vec3 | undefined;
@@ -405,7 +520,7 @@ export class GsViewer {
           );
           normalLine.setLocalRotation(new Quat().setFromDirections(LOCAL_UP, direction));
           normalLine.setLocalScale(lineDiameter, NORMAL_SEGMENT_METERS, lineDiameter);
-          current.entity.addChild(normalLine);
+          current.root.addChild(normalLine);
         }
       }
 
@@ -424,7 +539,7 @@ export class GsViewer {
         referenceResolution: new Vec2(1280, 720),
         screenSpace: false
       });
-      current.entity.addChild(textScreen);
+      current.root.addChild(textScreen);
 
       const text = new Entity(`inspection-text:${point.id}`);
       text.setLocalPosition(0, 58, 0);
@@ -516,7 +631,8 @@ export class GsViewer {
     const picker = this.picker;
     const circleSelector = this.circleSelector;
     const current = this.current;
-    if (!app || !cameraEntity || !camera || !picker || !circleSelector || !current || this.pickerBusy) return null;
+    if (!app || !cameraEntity || !camera || !picker || !circleSelector || !current ||
+        !current.entity.enabled || this.pickerBusy) return null;
     const rect = this.canvas.getBoundingClientRect();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
@@ -543,11 +659,11 @@ export class GsViewer {
       const selection = await picker.getSelectionAsync(x, y, 1, 1);
       if (this.disposed || generation !== this.generation ||
           !selection.some((selected) => selected === current.entity.gsplat)) return null;
-      const inverse = current.entity.getWorldTransform().clone().invert();
+      const inverse = current.root.getWorldTransform().clone().invert();
       const localCamera = inverse.transformPoint(cameraEntity.getPosition(), new Vec3());
       const modelViewProjection = new Mat4();
       modelViewProjection.mul2(camera.projectionMatrix, camera.viewMatrix);
-      modelViewProjection.mul(current.entity.getWorldTransform());
+      modelViewProjection.mul(current.root.getWorldTransform());
       const selectionResult = await circleSelector.selectCircle(
         current.entity.gsplat!,
         modelViewProjection,
@@ -566,12 +682,14 @@ export class GsViewer {
 
   clear() {
     this.generation += 1;
+    this.voxelDebugGeneration += 1;
     if (!this.current || !this.app) {
       return;
     }
+    this.clearVoxelDebugForScene(this.current);
     this.clearInspectionMarkers(this.current);
     this.circleSelector?.clearResidentResources();
-    this.current.entity.destroy();
+    this.current.root.destroy();
     this.current.asset.unload();
     this.app.assets.remove(this.current.asset);
     this.current = undefined;
@@ -583,11 +701,13 @@ export class GsViewer {
     }
     this.disposed = true;
     this.generation += 1;
+    this.voxelDebugGeneration += 1;
     window.removeEventListener('resize', this.resize);
     if (this.current && this.app) {
+      this.clearVoxelDebugForScene(this.current);
       this.clearInspectionMarkers(this.current);
       this.circleSelector?.clearResidentResources();
-      this.current.entity.destroy();
+      this.current.root.destroy();
       this.current.asset.unload();
       this.app.assets.remove(this.current.asset);
       this.current = undefined;
@@ -616,6 +736,8 @@ export class GsViewer {
     this.inspectionSelectedMaterial = undefined;
     this.inspectionNormalMaterial?.destroy();
     this.inspectionNormalMaterial = undefined;
+    this.voxelDebugMaterial?.destroy();
+    this.voxelDebugMaterial = undefined;
     this.app?.destroy();
     this.app = undefined;
     this.device = undefined;
@@ -634,6 +756,16 @@ export class GsViewer {
     scene.markers = [];
   }
 
+  private clearVoxelDebugForScene(scene: LoadedScene) {
+    const overlay = scene.voxelDebug;
+    const app = this.app;
+    if (!overlay || !app) return;
+    scene.voxelDebug = undefined;
+    overlay.entity.destroy();
+    overlay.asset.unload();
+    app.assets.remove(overlay.asset);
+  }
+
   private createInspectionMaterial(name: string, color: Color) {
     const material = new StandardMaterial();
     material.name = name;
@@ -642,6 +774,24 @@ export class GsViewer {
     material.useLighting = false;
     material.depthTest = true;
     material.depthWrite = true;
+    material.update();
+    return material;
+  }
+
+  private createVoxelDebugMaterial() {
+    const material = new StandardMaterial();
+    const color = new Color(0.02, 0.82, 1);
+    material.name = 'voxel-debug-cyan';
+    material.diffuse = color;
+    material.emissive = color;
+    material.useLighting = false;
+    material.opacity = 0.34;
+    material.blendType = BLEND_NORMAL;
+    material.cull = CULLFACE_NONE;
+    material.depthTest = true;
+    material.depthWrite = false;
+    material.depthBias = -1;
+    material.slopeDepthBias = -1;
     material.update();
     return material;
   }

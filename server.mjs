@@ -424,6 +424,10 @@ const runCollisionBuild = async (id, options) => {
       treeDepth: report.metadata.treeDepth,
       gridBounds: report.metadata.gridBounds,
       checksums: report.checksums,
+      debugMeshUrl:
+        `/api/datasets/${id}/collision-revisions/${revision}/${report.collisionMesh.file}`,
+      debugMeshBytes: report.collisionMesh.bytes,
+      debugMeshMode: 'faces',
       createdAt: new Date().toISOString()
     };
     await writeDataset(current);
@@ -504,6 +508,7 @@ const contentTypes = new Map([
   ['.css', 'text/css; charset=utf-8'],
   ['.json', 'application/json; charset=utf-8'],
   ['.webp', 'image/webp'],
+  ['.glb', 'model/gltf-binary'],
   ['.ply', 'application/octet-stream'],
   ['.svg', 'image/svg+xml'],
   ['.png', 'image/png'],

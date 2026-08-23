@@ -152,6 +152,8 @@ textAnchor = P + N × 1.12m
 
 这三类对象都属于现有 PlayCanvas 场景，不创建第二个 Canvas、Renderer 或 GPU 上下文。选中中心集合只用于位置和 PCA，不再创建临时红色 Gaussian 调试层。
 
+GS、体素调试网格和标签属于同一坐标根节点下的独立子节点。取消勾选“显示高斯”只关闭 GS Entity，不会隐藏已有标签；进入新标签选择时会重新开启 GS。体素调试 Mesh 固定不可拾取，既不能成为圆选命中，也不能拦截标签点击。其完整原理见 [`VOXEL_COLLISION_DEBUG.md`](VOXEL_COLLISION_DEBUG.md)。
+
 ## 9. 法向如何进入观察点与观察方向
 
 对标签位置 `P`、单位法向 `N` 和业务观察距离 `d`，名义观察几何为：

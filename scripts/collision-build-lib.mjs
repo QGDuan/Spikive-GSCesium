@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, stat, writeFile } from 'node:fs/promises';
 import { availableParallelism } from 'node:os';
 import { dirname, resolve } from 'node:path';
 
@@ -59,9 +59,33 @@ const assertBounds = (bounds, name) => {
   }
 };
 
-export const validateCollisionArtifact = async (outputDirectory, expectedOptions) => {
+const validateGlb = async (path) => {
+  const stats = await stat(path);
+  if (!stats.isFile() || stats.size < 20) {
+    throw new Error('体素调试网格为空或文件过短。');
+  }
+  const handle = await open(path, 'r');
+  try {
+    const header = Buffer.alloc(12);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead !== header.length || header.toString('ascii', 0, 4) !== 'glTF' ||
+        header.readUInt32LE(4) !== 2 || header.readUInt32LE(8) !== stats.size) {
+      throw new Error('体素调试网格不是有效的 GLB 2.0 文件。');
+    }
+  } finally {
+    await handle.close();
+  }
+  return stats;
+};
+
+export const validateCollisionArtifact = async (
+  outputDirectory,
+  expectedOptions,
+  { requireCollisionMesh = false } = {}
+) => {
   const jsonPath = resolve(outputDirectory, 'scene.voxel.json');
   const binPath = resolve(outputDirectory, 'scene.voxel.bin');
+  const meshPath = resolve(outputDirectory, 'scene.collision.glb');
   const metadata = JSON.parse(await readFile(jsonPath, 'utf8'));
 
   if (metadata.version !== '1.1') {
@@ -94,18 +118,38 @@ export const validateCollisionArtifact = async (outputDirectory, expectedOptions
     throw new Error(`体素二进制长度无效：期望 ${expectedBytes}，实际 ${binStats.size}`);
   }
 
+  const meshStats = requireCollisionMesh ? await validateGlb(meshPath) : undefined;
   const disk = await directorySize(outputDirectory);
-  const [metadataSha256, binarySha256] = await Promise.all([hashFile(jsonPath), hashFile(binPath)]);
+  const [metadataSha256, binarySha256, meshSha256] = await Promise.all([
+    hashFile(jsonPath),
+    hashFile(binPath),
+    meshStats ? hashFile(meshPath) : undefined
+  ]);
+  const checksums = {
+    'scene.voxel.json': metadataSha256,
+    'scene.voxel.bin': binarySha256
+  };
+  if (meshSha256) checksums['scene.collision.glb'] = meshSha256;
   return {
     metadata,
     bytes: disk.bytes,
     files: disk.files,
     binaryBytes: binStats.size,
-    checksums: {
-      'scene.voxel.json': metadataSha256,
-      'scene.voxel.bin': binarySha256
-    }
+    collisionMesh: meshStats ? { file: 'scene.collision.glb', bytes: meshStats.size } : null,
+    checksums
   };
+};
+
+export const createCollisionArguments = (source, output, options = {}) => {
+  const validated = validateCollisionOptions(options);
+  return [
+    '--memory',
+    source,
+    '--voxel-size', String(validated.voxelSize),
+    '--voxel-opacity', String(validated.voxelOpacity),
+    '--collision-mesh', 'faces',
+    output
+  ];
 };
 
 const progressForLine = (line) => {
@@ -134,13 +178,7 @@ export const buildOfficialCollision = async ({
 
   onProgress?.({ progress: 3, stage: '正在启动官方 GPU 体素化' });
   await runSplatTransform(
-    [
-      '--memory',
-      source,
-      '--voxel-size', String(options.voxelSize),
-      '--voxel-opacity', String(options.voxelOpacity),
-      output
-    ],
+    createCollisionArguments(source, output, options),
     {
       onChild,
       onLog: (line) => {
@@ -152,12 +190,17 @@ export const buildOfficialCollision = async ({
   );
 
   onProgress?.({ progress: 96, stage: '正在校验体素碰撞产物' });
-  const report = await validateCollisionArtifact(outputDirectory, options);
+  const report = await validateCollisionArtifact(outputDirectory, options, {
+    requireCollisionMesh: true
+  });
   const manifest = {
     schemaVersion: 1,
     strategy: 'official-sparse-voxel-octree-v1',
     coordinateSystem: 'local-z-up-meters',
-    collisionMeshGenerated: false,
+    collisionMeshGenerated: true,
+    collisionMeshMode: 'faces',
+    collisionMeshFile: report.collisionMesh.file,
+    collisionMeshDebugOnly: true,
     execution: {
       voxelization: 'WebGPU parallel',
       note: 'CPU worker 数不适用于官方体素写入；SOG 编码使用独立 worker pool。'

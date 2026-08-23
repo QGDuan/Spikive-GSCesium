@@ -16,6 +16,9 @@ interface CollisionState {
   voxelOpacity: number;
   bytes?: number;
   nodeCount?: number;
+  debugMeshUrl?: string;
+  debugMeshBytes?: number;
+  debugMeshMode?: 'faces';
 }
 
 interface Dataset {
@@ -384,12 +387,18 @@ const createCard = (id: string) => {
     ['build', '切片'],
     ['label', '添加巡检点'],
     ['collision', '计算体素'],
+    ['display-gs', '显示高斯'],
+    ['display-voxel', '显示体素'],
     ['delete', '删除']
   ] as const) {
     const button = document.createElement('button');
     button.type = 'button';
     button.dataset.action = action;
     button.textContent = label;
+    if (action === 'display-gs' || action === 'display-voxel') {
+      button.classList.add('visibility-toggle');
+      button.setAttribute('aria-pressed', 'false');
+    }
     if (action === 'build') button.className = 'primary';
     if (action === 'delete') button.className = 'danger';
     actions.append(button);
@@ -501,6 +510,7 @@ const updateCard = (dataset: Dataset) => {
   role(card, 'meta').textContent = dataset.visual
     ? `${dataset.lodLevels} LOD · ${gaussianCount?.toLocaleString('zh-CN') ?? '—'} GS · ${formatBytes(dataset.visual.bytes)}` +
       (dataset.collision.status === 'ready' ? ` · SVO ${formatBytes(dataset.collision.bytes)}` : '') +
+      (dataset.collision.debugMeshBytes ? ` · 调试网格 ${formatBytes(dataset.collision.debugMeshBytes)}` : '') +
       ` · 巡检点 ${dataset.labelCount ?? 0}`
     : `等待切片 · ${dataset.lodLevels} LOD`;
   role(card, 'stage').textContent = ['building', 'ready', 'failed'].includes(dataset.collision.status)
@@ -534,6 +544,28 @@ const updateCard = (dataset: Dataset) => {
   const collision = actionButton(card, 'collision');
   collision.textContent = dataset.collision.status === 'ready' ? '重新计算体素' : '计算体素';
   collision.disabled = Boolean(dataset.builtin) || !dataset.visual || heavyTaskRunning || dataset.status === 'building';
+  const sceneLoaded = selectedDatasetId === dataset.id && loadedRevision.startsWith(`${dataset.id}:`);
+  const displayGaussian = actionButton(card, 'display-gs');
+  const gaussianVisible = sceneLoaded && viewer.gaussianVisible;
+  displayGaussian.classList.toggle('is-active', gaussianVisible);
+  displayGaussian.setAttribute('aria-pressed', String(gaussianVisible));
+  displayGaussian.disabled = Boolean(dataset.builtin) || !dataset.visual ||
+    (heavyTaskRunning && !sceneLoaded);
+  displayGaussian.title = '独立显示或隐藏 Gaussian；不会关闭体素和巡检点';
+
+  const voxelDebug = actionButton(card, 'display-voxel');
+  const voxelDebugVisible = selectedDatasetId === dataset.id &&
+    Boolean(dataset.collision.debugMeshUrl) && viewer.voxelDebugUrl === dataset.collision.debugMeshUrl;
+  voxelDebug.classList.toggle('is-active', voxelDebugVisible);
+  voxelDebug.setAttribute('aria-pressed', String(voxelDebugVisible));
+  voxelDebug.disabled = Boolean(dataset.builtin) || !dataset.visual ||
+    (!dataset.collision.debugMeshUrl && dataset.collision.status !== 'ready') ||
+    (heavyTaskRunning && !voxelDebugVisible);
+  voxelDebug.title = dataset.collision.debugMeshUrl
+    ? `按需加载 ${formatBytes(dataset.collision.debugMeshBytes)} 的体素面网格；仅用于调试，不参与碰撞判断`
+    : dataset.collision.status === 'ready'
+      ? '点击后可按当前体素参数生成调试网格；不会自动改参'
+      : '体素计算完成后可用于调试显示';
   const label = actionButton(card, 'label');
   label.textContent = pickingDatasetId === dataset.id ? '取消选择' : '选择巡检点';
   label.classList.toggle('is-active', pickingDatasetId === dataset.id);
@@ -747,11 +779,59 @@ cardsContainer.addEventListener('click', async (event) => {
     } else if (button.dataset.action === 'collision') {
       if (dataset.collision.status === 'ready' &&
           !window.confirm(`重新计算“${dataset.name}”的体素？当前版本会保留到新版校验通过。`)) return;
+      if (selectedDatasetId === dataset.id) viewer.clearVoxelDebug();
       await requestJson(`/api/datasets/${dataset.id}/collision/build`, {
         method: 'POST',
         body: JSON.stringify({ voxelSize: settings.voxelSize, voxelOpacity: settings.voxelOpacity })
       });
       setStatus(`${dataset.name} 已进入 GPU 并行体素任务。`);
+    } else if (button.dataset.action === 'display-gs') {
+      const sceneWasLoaded = loadedRevision.startsWith(`${dataset.id}:`);
+      const visible = sceneWasLoaded ? !viewer.gaussianVisible : true;
+      await loadDataset(dataset);
+      viewer.setGaussianVisible(visible);
+      renderDatasetCards();
+      setStatus(
+        visible
+          ? `${dataset.name} Gaussian 已显示。`
+          : `${dataset.name} Gaussian 已隐藏；体素和巡检点状态不变。`,
+        'ready'
+      );
+    } else if (button.dataset.action === 'display-voxel') {
+      const debugMeshUrl = dataset.collision.debugMeshUrl;
+      if (!debugMeshUrl) {
+        if (dataset.collision.status !== 'ready') {
+          throw new Error('请先完成体素计算。');
+        }
+        if (!window.confirm(
+          `“${dataset.name}”的旧体素版本没有调试网格。` +
+          `是否使用当前 ${settings.voxelSize} m / 透明度 ${settings.voxelOpacity} 参数重新生成？` +
+          '系统不会自动改参，旧版本会保留到新版本校验通过。'
+        )) return;
+        await requestJson(`/api/datasets/${dataset.id}/collision/build`, {
+          method: 'POST',
+          body: JSON.stringify({ voxelSize: settings.voxelSize, voxelOpacity: settings.voxelOpacity })
+        });
+        setStatus(`${dataset.name} 已按当前参数进入体素调试网格生成任务。`);
+        await refreshDatasets();
+        return;
+      }
+      const alreadyVisible = viewer.voxelDebugUrl === debugMeshUrl;
+      if (!alreadyVisible && (dataset.collision.debugMeshBytes ?? 0) >= 256 * 1024 ** 2 &&
+          !window.confirm(
+            `“${dataset.name}”的体素调试网格为 ${formatBytes(dataset.collision.debugMeshBytes)}，` +
+            '加载期间会明显占用内存和显存。继续显示吗？'
+          )) return;
+      await loadDataset(dataset);
+      setStatus(`正在按需加载 ${dataset.name} 的体素调试网格（${formatBytes(dataset.collision.debugMeshBytes)}）…`);
+      const visible = await viewer.toggleVoxelDebug(debugMeshUrl, dataset.name);
+      renderDatasetCards();
+      setStatus(
+        visible
+          ? `${dataset.name} 体素调试网格已显示；青色网格仅用于检查，不参与碰撞判断。`
+          : `${dataset.name} 体素调试网格已隐藏并释放。`,
+        'ready'
+      );
     } else if (button.dataset.action === 'label') {
       if (pickingDatasetId === dataset.id) {
         pickingDatasetId = '';
@@ -760,9 +840,11 @@ cardsContainer.addEventListener('click', async (event) => {
         setStatus('已取消添加巡检点。', 'ready');
       } else {
         await loadDataset(dataset);
+        viewer.setGaussianVisible(true);
         pickingDatasetId = dataset.id;
         canvas.classList.add('is-picking');
         setSelectionCircleVisible(true);
+        renderDatasetCards();
         setStatus(`选择巡检点：单击 GS，使用固定半径 ${FIXED_CIRCLE_RADIUS_PIXELS}px 的圆形多选；不支持拖动。`);
       }
     } else if (button.dataset.action === 'delete') {

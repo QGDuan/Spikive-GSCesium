@@ -396,13 +396,13 @@ input[type="number"] {
 
 .card-actions {
   display: grid;
-  grid-template-columns: 0.75fr 1.15fr 1fr 0.68fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 5px;
   margin-top: 8px;
 }
 
 .card-actions.visual-locked {
-  grid-template-columns: 1.2fr 1.1fr 0.7fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .card-actions button {
@@ -419,6 +419,42 @@ input[type="number"] {
   border-color: #ff544d;
   background: rgb(255 70 62 / 15%);
   color: #ffaaa5;
+}
+
+.card-actions button.visibility-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  text-align: left;
+}
+
+.card-actions button.visibility-toggle::before {
+  box-sizing: border-box;
+  display: inline-grid;
+  flex: 0 0 13px;
+  width: 13px;
+  height: 13px;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 30%);
+  border-radius: 3px;
+  color: #07120e;
+  content: '';
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.card-actions button.visibility-toggle.is-active {
+  border-color: rgb(105 225 177 / 42%);
+  background: rgb(105 225 177 / 10%);
+  color: #a9f2d5;
+}
+
+.card-actions button.visibility-toggle.is-active::before {
+  border-color: #69e1b1;
+  background: #69e1b1;
+  content: '✓';
 }
 
 .inspection-list-section {

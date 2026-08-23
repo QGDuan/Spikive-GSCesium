@@ -4,7 +4,10 @@
 
 系统只保存和使用 PLY 的本地 Z-up 米制工程坐标，不计算经纬度，也不引入 Cesium、AHoLo 或第二个 GPU 上下文。
 
-巡检点圆选、PCA 法向、空间标签与观察方向的详细原理见 [`docs/LABEL_SELECTION_NORMAL.md`](docs/LABEL_SELECTION_NORMAL.md)。
+详细原理文档：
+
+- 巡检点圆选、PCA 法向、空间标签与观察方向：[`docs/LABEL_SELECTION_NORMAL.md`](docs/LABEL_SELECTION_NORMAL.md)；
+- SVO 体素真值、GLB 调试网格和高斯/体素勾选开关：[`docs/VOXEL_COLLISION_DEBUG.md`](docs/VOXEL_COLLISION_DEBUG.md)。
 
 ## 1. 前置条件及环境配置
 
@@ -94,9 +97,17 @@ LOD0 直接使用完整源 PLY，不执行抽稀。其余层串行调用官方 `
 3. 点击“计算体素”，等待卡片显示“体素已就绪”；
 4. 已完成的数据可以点击“重新计算体素”。新版本校验通过前，上一版始终保留。
 
-体素化读取不可变的完整源 PLY，而不是抽稀 LOD。它调用 `splat-transform 3.3.0` 官方 WebGPU 并行体素化，生成 `scene.voxel.json` 与 `scene.voxel.bin` 稀疏体素八叉树。当前阶段不生成 GLB 碰撞网格，也不执行 floor/external fill、carve 或自动调参；这些操作会增加大场景可变网格内存，而且航线避障所需的计算真值是 SVO 本身。
+体素化读取不可变的完整源 PLY，而不是抽稀 LOD。它调用 `splat-transform 3.3.0` 官方 WebGPU 并行体素化，生成 `scene.voxel.json` 与 `scene.voxel.bin` 稀疏体素八叉树，同时用官方 `--collision-mesh faces` 生成同版本的 `scene.collision.glb` 调试面网格。系统不执行 floor/external fill、carve 或自动调参；航线避障所需的计算真值始终是 SVO，GLB 只负责让人检查体素覆盖是否合理。
 
 如果分辨率导致资源不足，任务会失败并给出错误，系统不会自行改粗体素。用户调整卡片参数后重新计算。
+
+### 调试显示体素
+
+- 数据卡片提供“显示高斯”和“显示体素”两个独立勾选按钮；载入场景时默认显示高斯、不显示体素，也可以只显示体素、同时显示或同时隐藏；
+- 勾选“显示体素”后，系统才会按需下载并显示半透明青色面网格；取消勾选会移除 Entity、卸载 Asset 并释放对应 GPU 资源；
+- 调试网格与 GS 共用当前 PlayCanvas Application、Canvas、GraphicsDevice 和场景坐标，不创建第二个 Renderer；它不可拾取，也不改变巡检点选择与碰撞查询；
+- 大场景调试网格可能达到数百 MiB，默认不加载。卡片会显示真实文件大小，达到 256 MiB 时加载前会再次确认；
+- 旧体素版本若没有 `scene.collision.glb`，点击“显示体素”会明确询问是否使用卡片中的当前参数重算；系统不会静默重算或修改体素参数。
 
 ### 数据卡片管理
 
@@ -104,6 +115,7 @@ LOD0 直接使用完整源 PLY，不执行抽稀。其余层串行调用官方 `
 - “切片”：只出现在尚未切片的数据上；
 - “添加巡检点”：进入 GS 表面拾取模式，再单击场景创建红色巡检点；
 - “计算体素/重新计算体素”：只在切片成功后可用；
+- “显示高斯”/“显示体素”：勾选式独立开关，分别控制 GS 和当前体素版本的调试网格；
 - “删除”：永久删除源 PLY、视觉版本、体素版本和失败的工作目录，操作前必须确认。
 
 每个数据场景的卡片下方都有独立的“场景巡检点”列表。列表不会把不同数据集的点混在一起；点击列表项会加载所属场景、选中对应点并打开详情，点击右侧 `×` 可删除未被业务引用的点。后端拒绝删除时，前端会保留点位并显示原因。
@@ -150,6 +162,7 @@ var/local-datasets/<dataset-id>/
 ├── collision-revisions/<revision>/
 │   ├── scene.voxel.json
 │   ├── scene.voxel.bin
+│   ├── scene.collision.glb
 │   └── collision-manifest.json
 ├── work/<revision>/
 └── collision-work/<revision>/
