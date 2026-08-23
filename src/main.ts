@@ -23,7 +23,7 @@ import { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 
 import './styles.css';
 
-const POINT_CLOUD_URL = '/data/point_cloud.ply';
+const POINT_CLOUD_URL = '/data/point_cloud-lod/lod-meta.json';
 const POINT_COUNT = 14_224_203;
 
 const canvas = document.querySelector<HTMLCanvasElement>('#application-canvas');
@@ -128,7 +128,7 @@ const start = async () => {
 
   const pointCloud = new Asset('point_cloud', 'gsplat', { url: POINT_CLOUD_URL });
 
-  setStatus('正在加载原始 point_cloud.ply（922 MiB，无切片、无降采样）…');
+  setStatus('正在加载官方 Streamed SOG（LOD0–3，按需流式请求）…');
   pendingLoad = loadAssets([pointCloud], app);
   await pendingLoad.promise;
   pendingLoad = undefined;
@@ -184,7 +184,7 @@ const start = async () => {
     throw new Error('PlayCanvas CameraControls 初始化失败。');
   }
 
-  setStatus(`原始 PLY 已加载：${POINT_COUNT.toLocaleString('zh-CN')} 个 Gaussian`, 'ready');
+  setStatus(`Streamed SOG 已加载：LOD0 ${POINT_COUNT.toLocaleString('zh-CN')} 个 Gaussian`, 'ready');
 };
 
 start().catch((error: unknown) => {

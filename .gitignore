@@ -5,3 +5,4 @@ var/
 
 # The raw research dataset is installed locally and is intentionally not committed.
 public/data/*.ply
+public/data/point_cloud-lod/
