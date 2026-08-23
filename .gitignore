@@ -1,10 +1,7 @@
 node_modules/
 dist/
-coverage/
-.DS_Store
 var/
-release/
-*.log
-*.tsbuildinfo
-.env
-.env.local
+.DS_Store
+
+# The raw research dataset is installed locally and is intentionally not committed.
+public/data/*.ply

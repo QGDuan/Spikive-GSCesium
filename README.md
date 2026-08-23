@@ -1,55 +1,41 @@
-# Spikive GS Inspector
+# Spikive GS — PlayCanvas 原始 PLY 基线
 
-完全本地部署的 Gaussian Splatting 巡检平台。当前主线以 PlayCanvas 官方能力直接显示 GS，并从同一份不可变 GraphDECO PLY 独立生成碰撞体素；视觉转换不再包含项目自定义切片、格式补丁、预算或 LOD 调参。
+这是从零搭建的 `dev` 基线，只验证一件事：使用最新版 PlayCanvas 直接显示原始 Gaussian Splatting PLY。
 
-当前固定版本：
+当前版本明确不包含：
 
-- `playcanvas@2.21.4`
-- `@playcanvas/splat-transform@3.3.0`（官方未修改 Release）
+- 数据切片、LOD、SOG 或任何转换；
+- 体素、碰撞检测和航线规划；
+- 标签、数据库、后端服务；
+- Cesium、AHoLo、React 或第二个渲染器；
+- 自定义 Gaussian Shader、透明度修正、点数预算或画质参数。
 
-## 快速开始
+## 环境
 
-要求 Node.js `>=22.22.1`，推荐使用最新版 Chrome 或 Edge。
+- Node.js 22.22.1 或更高版本
+- 支持 WebGPU 或 WebGL2 的现代浏览器
+- 原始数据：`/Users/duanqg/Downloads/point_cloud.ply`
+
+项目固定使用 `playcanvas@2.21.4`。程序优先请求 WebGPU；若不可用，由 PlayCanvas 自身回退到 WebGL2。
+
+## 首次启动
 
 ```bash
+cp /Users/duanqg/Downloads/point_cloud.ply public/data/point_cloud.ply
 npm install
 npm run dev
 ```
 
-开发页面默认是 `http://localhost:5173`，API 默认是 `http://localhost:3000`。完整检查：
+浏览器打开终端显示的地址，默认通常是 <http://localhost:5173>。
 
-```bash
-npm run verify
-npm run audit:data
-```
+## 操作
 
-构建客户测试包：
+- 左键拖动：旋转
+- 中键拖动或 Shift + 左键拖动：平移
+- 滚轮：缩放
 
-```bash
-RELEASE_VERSION=v0.2.0-beta.2 RELEASE_TARGET=macos-arm64 npm run release:customer
-RELEASE_VERSION=v0.2.0-beta.2 RELEASE_TARGET=windows-x64 node scripts/build-customer-package.mjs
-```
+## 数据说明
 
-安装包完全本地运行，不需要 Token 或商业云服务，也不包含开发机已有的模型、数据库、标签或航迹。
+当前 `point_cloud.ply` 为二进制 PLY，包含 14,224,203 个 Gaussian，文件大小 967,246,731 字节。浏览器会完整下载并解析该文件；这是刻意保留的无切片、无降采样画质基线，不代表最终的大场景交付方案。
 
-## 固定系统边界
-
-- PlayCanvas 是唯一 Renderer，只创建一个 Canvas 和一个 `GraphicsDevice`；浏览器优先 WebGPU，不可用时由 PlayCanvas 回退 WebGL2。
-- 视觉构建严格采用 splat-transform 官方 Streamed SOG 示例：源 PLY 为 LOD0，再生成 50%、25%、10% 三个 LOD，最后输出 `lod-meta.json`。
-- 不向视觉命令附加 Chunk 尺寸、范围、过滤、旋转、格式、GPU、内存预算或项目私有参数；512K Chunk 和 16 m extent 等均来自上游默认值。
-- 前端用 PlayCanvas 原生 `gsplat` Asset/Component 加载 `lod-meta.json`，不设置 Gaussian 预算、LOD 范围、距离倍率、贡献阈值、数据格式或自定义 Loader。
-- 唯一保留的额外数据生成是从全量源 PLY 独立生成 SVO 与碰撞调试网格。SVO 是拾取、法向量、机体膨胀和航迹碰撞检查的真值，视觉 LOD 不参与这些计算。
-- 视觉 revision 与碰撞、标签、任务独立管理。视觉重建失败时旧版本继续服务，不自动换参数。
-- 局部 Z-up 米制坐标是数据真值；标签与任务绑定数据集，被任务引用的标签必须先删除任务才能删除。
-- 性能面板只读显示 WebGPU/WebGL2、FPS 和资源统计，不反馈或修改引擎配置。
-- `var/` 是业务数据，不是构建缓存；禁止随代码清理。
-
-## 文档
-
-- [客户测试使用说明](docs/CUSTOMER_GUIDE.md)
-- [系统架构与数据依赖闭环](docs/ARCHITECTURE.md)
-- [PlayCanvas 官方 Streamed SOG](docs/PLAYCANVAS_RENDERING.md)
-- [API 与删除依赖规则](docs/API.md)
-- [长期 WebGPU 路线](docs/WEBGPU_ROADMAP.md)
-- [Cesium 历史版本说明](docs/CESIUM_ARCHIVE.md)
-- [第三方组件与许可](docs/THIRD_PARTY_NOTICES.md)
+`public/data/*.ply` 不进入 Git，避免把近 1 GiB 的研究数据提交到代码仓库。每台开发机首次运行前只需复制一次。
