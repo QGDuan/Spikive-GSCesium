@@ -6,7 +6,7 @@ Cesium 架构已从当前 `main` 退役，不再作为运行时依赖或故障�
 - 标签：`v0.1.0-cesium-final`
 - 提交：`7da45a8efa5d779dd8b3895f08da27a5ae4f7924`
 
-该归档包含当时的 Cesium Gaussian 3D Tiles、AHoLo 候选 Renderer、Reveal Shader 补丁及对应文档，可用于历史问题复现和紧急版本回退。归档不会随 `main` 的 AHoLo 方案继续演进。
+该归档包含当时的 Cesium Gaussian 3D Tiles、AHoLo 候选 Renderer、Reveal Shader 补丁及对应文档，可用于历史问题复现。归档不会随当前 PlayCanvas 主线继续演进。
 
 ## 回退原则
 
@@ -22,4 +22,4 @@ npm run verify
 
 ## 历史产物
 
-升级到 AHoLo-only `main` 时，系统不会自动删除 `var/published/<dataset>/` 中的历史 Cesium Tiles。这些字节不再被当前 API 发布，也不计入当前 AHoLo revision；保留它们可支持冻结版本回退。确需回收磁盘时，必须先完成独立备份和依赖核对，再由运维人员执行，不得把清理混入代码升级或普通“清除显示”。
+升级到 PlayCanvas-only 生产入口时，系统不会自动删除 `var/published/<dataset>/` 中的历史 Cesium Tiles。这些字节不再被当前 API 发布，也不计入当前 PlayCanvas revision；保留它们可支持冻结版本复现。确需回收磁盘时，必须先完成独立备份和依赖核对，再由运维人员执行，不得把清理混入代码升级或普通“清除显示”。

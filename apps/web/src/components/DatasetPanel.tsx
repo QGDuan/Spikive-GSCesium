@@ -11,12 +11,12 @@ interface DatasetPanelProps {
   onCreated(id: string): void;
   onClearView(): void;
   onRetry(id: string, voxelSize: number): Promise<void>;
-  onBuildAholo(id: string): Promise<void>;
+  onBuildVisuals(id: string): Promise<void>;
   onDelete(id: string): void;
   onMessage(value: string): void;
 }
 
-export function DatasetPanel({ datasets, selectedId, onSelect, onFocus, onCreated, onClearView, onRetry, onBuildAholo, onDelete, onMessage }: DatasetPanelProps) {
+export function DatasetPanel({ datasets, selectedId, onSelect, onFocus, onCreated, onClearView, onRetry, onBuildVisuals, onDelete, onMessage }: DatasetPanelProps) {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [retryingId, setRetryingId] = useState<string | null>(null);
@@ -62,7 +62,7 @@ export function DatasetPanel({ datasets, selectedId, onSelect, onFocus, onCreate
       onCreated(createdDataset.id);
       onMessage("数据集已创建，正在断点上传");
       await uploadPly(file, createdDataset.id, setProgress);
-      onMessage("上传完成，后台开始生成碰撞体和 AHoLo Chunk LOD");
+      onMessage("上传完成，后台开始生成碰撞体和 PlayCanvas 官方 Streamed SOG");
     } catch (error) {
       if (createdDataset) await api.deleteDataset(createdDataset.id).catch(() => undefined);
       onMessage(`上传失败，已清理未完成记录：${errorMessage(error)}`);
@@ -144,11 +144,11 @@ export function DatasetPanel({ datasets, selectedId, onSelect, onFocus, onCreate
         onClick={() => {
           if (!selectedId) return;
           setRebuildingId(selectedId);
-          void onBuildAholo(selectedId)
-            .catch(error => onMessage(`AHoLo 视觉构建失败：${errorMessage(error)}`))
+          void onBuildVisuals(selectedId)
+            .catch(error => onMessage(`PlayCanvas 视觉构建失败：${errorMessage(error)}`))
             .finally(() => setRebuildingId(null));
         }}
-      >{rebuildingId === selectedId ? "已排队…" : selectedDataset?.aholoVisualRevision ? "重建 AHoLo 视觉" : "构建 AHoLo 视觉"}</button>
+      >{rebuildingId === selectedId ? "已排队…" : selectedDataset?.activeVisualRevision ? "重建 PlayCanvas 视觉" : "构建 PlayCanvas 视觉"}</button>
       <button type="button" className="danger" disabled={!selectedId || uploading} onClick={() => selectedId && onDelete(selectedId)}>永久删除所选模型</button>
     </div>
   </>;
@@ -172,7 +172,7 @@ const statusLabel = (status: Dataset["status"]) => ({
   created: "待上传",
   uploading: "上传中",
   queued: "排队",
-  tiling: "AHoLo 切片中",
+  tiling: "SOG 切片中",
   collision_processing: "碰撞处理中",
   rebuilding: "高清重建中",
   ready: "已就绪",

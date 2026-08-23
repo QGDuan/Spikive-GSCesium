@@ -14,8 +14,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@manycore/aholo-viewer": "1.8.1",
     "@spikive/shared": "0.1.0",
+    "playcanvas": "2.21.4",
     "react": "19.1.1",
     "react-dom": "19.1.1",
     "tus-js-client": "4.3.1"

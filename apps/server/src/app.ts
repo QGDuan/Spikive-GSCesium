@@ -19,8 +19,10 @@ import { CollisionRepository } from "./collision.js";
 import { ProcessingWorker } from "./worker.js";
 import { planMission } from "./planner.js";
 import {
-  AHOLO_CHUNK_LOD_POLICY, activateAholoRevision, readAholoManifest, readAholoReport, readVersionedLodMeta, resolveAholoRevision
-} from "./aholo-artifacts.js";
+  activatePlayCanvasRevision, readPlayCanvasManifest, readPlayCanvasReport,
+  resolvePlayCanvasRevision
+} from "./playcanvas-artifacts.js";
+import { RuntimeTelemetrySampler } from "./telemetry.js";
 
 export interface AppContext { app: FastifyInstance; db: Database; worker: ProcessingWorker; collisions: CollisionRepository }
 
@@ -51,9 +53,10 @@ export async function buildApp(): Promise<AppContext> {
     maxAge: 86400
   });
   const db = new Database(config.dbPath);
-  await reconcileAholoRevisionFields(db);
+  await reconcileVisualRevisionFields(db);
   const collisions = new CollisionRepository(config.publishedDir, config.collisionCacheBytes);
   const worker = new ProcessingWorker(db, collisions, app.log);
+  const telemetry = new RuntimeTelemetrySampler();
   app.addHook("onClose", async () => { await worker.stop(); db.close(); });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -66,6 +69,10 @@ export async function buildApp(): Promise<AppContext> {
     reply.code(status).send({ error: message });
   });
   app.get("/healthz", async () => ({ status: "ok", conversionEnabled: config.conversionEnabled, collisionCache: collisions.stats }));
+  app.get("/api/runtime-telemetry", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return telemetry.sample();
+  });
 
   app.get("/api/datasets", async () => db.listDatasets());
   app.post("/api/datasets", async (request, reply) => {
@@ -73,7 +80,7 @@ export async function buildApp(): Promise<AppContext> {
     const dataset: Dataset = {
       ...input, indoorSeed: input.indoorSeed ?? null, id: randomUUID(),
       sourceCoordinateSystem: input.sourceCoordinateSystem,
-      aholoVisualRevision: null, aholoPolicyVersion: null,
+      visualBackend: "playcanvas-sog", activeVisualRevision: null, visualPolicyVersion: null,
       status: "created", collisionStatus: "pending", progress: 0, stage: "等待上传",
       error: null, uploadId: null, createdAt: now, updatedAt: now
     };
@@ -104,10 +111,10 @@ export async function buildApp(): Promise<AppContext> {
   app.post<{ Params: { id: string } }>("/api/datasets/:id/rebuild-visuals", async (request, reply) => {
     const dataset = requireResource(db.getDataset(request.params.id));
     if (dataset.status !== "ready" || dataset.collisionStatus !== "ready") {
-      return reply.code(409).send({ error: "只有碰撞数据已完整发布的数据集可以构建 AHoLo 视觉" });
+      return reply.code(409).send({ error: "只有碰撞数据已完整发布的数据集可以构建 PlayCanvas 视觉" });
     }
     if (dataset.sourceCoordinateSystem !== "z_up") {
-      return reply.code(409).send({ error: "旧数据缺少可确认的 z_up 源坐标审计，不能静默转换为 AHoLo" });
+      return reply.code(409).send({ error: "旧数据缺少可确认的 z_up 源坐标审计，不能静默转换为 PlayCanvas" });
     }
     try {
       await Promise.all([
@@ -117,11 +124,11 @@ export async function buildApp(): Promise<AppContext> {
         stat(path.join(config.publishedDir, dataset.id, "collision", "scene.collision.glb"))
       ]);
     } catch {
-      return reply.code(409).send({ error: "源 PLY 或碰撞产物不完整，不能构建 AHoLo 视觉" });
+      return reply.code(409).send({ error: "源 PLY 或碰撞产物不完整，不能构建 PlayCanvas 视觉" });
     }
     const next = db.updateDataset(dataset.id, {
       status: "rebuilding", progress: 5,
-      stage: dataset.aholoVisualRevision ? "AHoLo Chunk LOD 重建已排队；上一版本继续服务" : "AHoLo Chunk LOD 构建已排队",
+      stage: dataset.activeVisualRevision ? "PlayCanvas 官方 Streamed SOG 重建已排队；上一版本继续服务" : "PlayCanvas 官方 Streamed SOG 构建已排队",
       error: null
     });
     worker.wake();
@@ -135,67 +142,59 @@ export async function buildApp(): Promise<AppContext> {
     if (!["ready", "rebuilding"].includes(dataset.status)) return reply.code(409).send({ error: "数据尚未发布" });
     const datasetRoot = path.join(config.publishedDir, dataset.id);
     reply.header("Cache-Control", "no-store");
-    const resolved = await resolveAholoRevision(datasetRoot, dataset.aholoVisualRevision ?? undefined);
-    if (!resolved) return reply.code(404).send({ error: "该数据集还没有通过完整性校验的 AHoLo 视觉，请先执行视觉构建" });
-    const report = await readAholoReport(datasetRoot, resolved.record);
+    if (dataset.visualBackend !== "playcanvas-sog") return reply.code(409).send({ error: "该数据集没有当前 PlayCanvas 官方 Streamed SOG，请先构建视觉" });
+    const resolved = await resolvePlayCanvasRevision(datasetRoot, dataset.activeVisualRevision ?? undefined);
+    if (!resolved) return reply.code(404).send({ error: "该数据集还没有通过完整性校验的 PlayCanvas 视觉，请先执行视觉构建" });
+    const report = await readPlayCanvasReport(datasetRoot, resolved.record);
     const value: RenderManifest = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       datasetId: dataset.id,
+      renderer: "playcanvas",
+      visualBackend: "playcanvas-sog",
       activeVisualRevision: resolved.record.revision,
       source: { sha256: report.source.sha256, splatCount: report.source.splatCount, shDegree: report.source.shDegree },
       coordinateFrame: "tile_local_z_up",
       collisionRevision: report.collisionRevision,
       placement: dataset.placement,
-      aholo: {
-        lodMetaUrl: `/api/datasets/${dataset.id}/aholo-visual-revisions/${encodeURIComponent(resolved.record.revision)}/esz/lod-meta.json`,
-        referenceLodMetaUrl: `/api/datasets/${dataset.id}/aholo-visual-revisions/${encodeURIComponent(resolved.record.revision)}/ply-reference/lod-meta.json`,
-        reportUrl: `/api/datasets/${dataset.id}/aholo-visual-revisions/${encodeURIComponent(resolved.record.revision)}/report`,
+      playcanvas: {
+        lodMetaUrl: `/api/datasets/${dataset.id}/visual-revisions/${encodeURIComponent(resolved.record.revision)}/sog/lod-meta.json`,
+        reportUrl: `/api/datasets/${dataset.id}/visual-revisions/${encodeURIComponent(resolved.record.revision)}/report`,
         policyVersion: report.policyVersion,
-        maxBudget: AHOLO_CHUNK_LOD_POLICY.maxBudget,
         levels: report.levels,
         transform: report.transform
       }
     };
     return value;
   });
-  app.get<{ Params: { id: string; revision: string; format: string } }>("/api/datasets/:id/aholo-visual-revisions/:revision/:format/lod-meta.json", async (request, reply) => {
+  app.get<{ Params: { id: string; revision: string; "*": string } }>("/api/datasets/:id/visual-revisions/:revision/sog/*", async (request, reply) => {
     const dataset = requireResource(db.getDataset(request.params.id));
     if (!["ready", "rebuilding"].includes(dataset.status)) return reply.code(409).send({ error: "数据尚未发布" });
     if (!isSafeRevision(request.params.revision)) return reply.code(400).send({ error: "无效视觉 revision" });
-    const format = parseAholoFormat(request.params.format);
-    if (!format) return reply.code(400).send({ error: "无效 AHoLo 格式" });
-    const resolved = await resolveAholoRevision(path.join(config.publishedDir, dataset.id), request.params.revision);
-    if (!resolved) return reply.code(404).send({ error: "AHoLo revision 不存在" });
-    reply.header("Cache-Control", "no-store");
-    return readVersionedLodMeta({ datasetId: dataset.id, revision: resolved.record.revision, format, root: resolved.root });
-  });
-  app.get<{ Params: { id: string; revision: string; format: string; "*": string } }>("/api/datasets/:id/aholo-visual-revisions/:revision/:format/*", async (request, reply) => {
-    const dataset = requireResource(db.getDataset(request.params.id));
-    if (!["ready", "rebuilding"].includes(dataset.status)) return reply.code(409).send({ error: "数据尚未发布" });
-    if (!isSafeRevision(request.params.revision)) return reply.code(400).send({ error: "无效视觉 revision" });
-    const format = parseAholoFormat(request.params.format);
-    if (!format) return reply.code(400).send({ error: "无效 AHoLo 格式" });
     const relative = request.params["*"];
-    if (!isSafeRelativePath(relative) || relative.includes("/")) return reply.code(400).send({ error: "无效 AHoLo chunk 路径" });
-    const resolved = await resolveAholoRevision(path.join(config.publishedDir, dataset.id), request.params.revision);
-    if (!resolved) return reply.code(404).send({ error: "AHoLo revision 不存在" });
-    reply.type("application/octet-stream");
-    return reply.sendFile(relative, path.join(resolved.root, format), { immutable: true, maxAge: "1y" });
+    if (!isSafeRelativePath(relative)) return reply.code(400).send({ error: "无效 SOG 资源路径" });
+    const resolved = await resolvePlayCanvasRevision(path.join(config.publishedDir, dataset.id), request.params.revision);
+    if (!resolved) return reply.code(404).send({ error: "PlayCanvas revision 不存在" });
+    if (relative === "lod-meta.json") reply.header("Cache-Control", "no-store");
+    else reply.header("Cache-Control", "public, max-age=31536000, immutable");
+    if (relative.endsWith(".json")) reply.type("application/json; charset=utf-8");
+    else if (relative.endsWith(".webp")) reply.type("image/webp");
+    else reply.type("application/octet-stream");
+    return reply.sendFile(relative, path.join(resolved.root, "sog"), { cacheControl: false });
   });
-  app.get<{ Params: { id: string; revision: string } }>("/api/datasets/:id/aholo-visual-revisions/:revision/report", async (request, reply) => {
+  app.get<{ Params: { id: string; revision: string } }>("/api/datasets/:id/visual-revisions/:revision/report", async (request, reply) => {
     const dataset = requireResource(db.getDataset(request.params.id));
     if (!isSafeRevision(request.params.revision)) return reply.code(400).send({ error: "无效视觉 revision" });
-    const resolved = await resolveAholoRevision(path.join(config.publishedDir, dataset.id), request.params.revision);
-    if (!resolved) return reply.code(404).send({ error: "AHoLo revision 不存在" });
+    const resolved = await resolvePlayCanvasRevision(path.join(config.publishedDir, dataset.id), request.params.revision);
+    if (!resolved) return reply.code(404).send({ error: "PlayCanvas revision 不存在" });
     reply.header("Cache-Control", "no-store");
-    return readAholoReport(path.join(config.publishedDir, dataset.id), resolved.record);
+    return readPlayCanvasReport(path.join(config.publishedDir, dataset.id), resolved.record);
   });
-  app.post<{ Params: { id: string; revision: string } }>("/api/datasets/:id/aholo-visual-revisions/:revision/activate", async (request, reply) => {
+  app.post<{ Params: { id: string; revision: string } }>("/api/datasets/:id/visual-revisions/:revision/activate", async (request, reply) => {
     const dataset = requireResource(db.getDataset(request.params.id));
-    if (dataset.status !== "ready" || dataset.collisionStatus !== "ready") return reply.code(409).send({ error: "数据处理期间不能切换 AHoLo revision" });
+    if (dataset.status !== "ready" || dataset.collisionStatus !== "ready") return reply.code(409).send({ error: "数据处理期间不能切换视觉 revision" });
     if (!isSafeRevision(request.params.revision)) return reply.code(400).send({ error: "无效视觉 revision" });
     try {
-      const manifest = await activateAholoRevision({
+      const manifest = await activatePlayCanvasRevision({
         datasetRoot: path.join(config.publishedDir, dataset.id),
         revision: request.params.revision,
         sourcePath: path.join(config.sourcesDir, `${dataset.id}.ply`),
@@ -203,15 +202,17 @@ export async function buildApp(): Promise<AppContext> {
       });
       const record = manifest.revisions.find(value => value.revision === manifest.activeRevision)!;
       return db.updateDataset(dataset.id, {
-        aholoVisualRevision: record.revision,
-        aholoPolicyVersion: record.policyVersion,
-        stage: `已切换 AHoLo revision ${record.revision.slice(0, 8)}；碰撞、标签和航迹未变化`,
+        visualBackend: "playcanvas-sog",
+        activeVisualRevision: record.revision,
+        visualPolicyVersion: record.policyVersion,
+        stage: `已切换 PlayCanvas revision ${record.revision.slice(0, 8)}；碰撞、标签和航迹未变化`,
         error: null
       });
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
     }
   });
+
   app.get<{ Params: { id: string; "*": string } }>("/api/datasets/:id/collision/*", async (request, reply) => {
     const dataset = requireResource(db.getDataset(request.params.id));
     if (dataset.collisionStatus !== "ready") return reply.code(409).send({ error: "碰撞数据尚未发布" });
@@ -408,53 +409,33 @@ function isSafeRevision(value: string) {
   return /^[A-Za-z0-9._-]{1,160}$/.test(value);
 }
 
-function parseAholoFormat(value: string): "esz" | "ply-reference" | null {
-  return value === "esz" || value === "ply-reference" ? value : null;
-}
-
-async function reconcileAholoRevisionFields(db: Database) {
+async function reconcileVisualRevisionFields(db: Database) {
   for (const dataset of db.listDatasets()) {
     const datasetRoot = path.join(config.publishedDir, dataset.id);
-    const aholoManifest = await readAholoManifest(datasetRoot);
-    if (!aholoManifest) {
-      if (dataset.sourceCoordinateSystem === null && await legacySourceIsAuditedZUp(datasetRoot)) {
-        db.updateDataset(dataset.id, { sourceCoordinateSystem: "z_up" });
+    const visualManifest = await readPlayCanvasManifest(datasetRoot);
+    if (visualManifest) {
+      const active = visualManifest.revisions.find(value => value.revision === visualManifest.activeRevision);
+      if (!active) throw new Error(`数据集 ${dataset.id} 的 PlayCanvas manifest 缺少活动 revision`);
+      const report = await readPlayCanvasReport(datasetRoot, active);
+      if (report.source.coordinateSystem !== "tile_local_z_up") throw new Error(`数据集 ${dataset.id} 的 PlayCanvas report 缺少 tile_local_z_up 坐标审计`);
+      if (dataset.visualBackend !== "playcanvas-sog" || dataset.activeVisualRevision !== active.revision || dataset.visualPolicyVersion !== active.policyVersion || dataset.sourceCoordinateSystem !== "z_up") {
+        db.updateDataset(dataset.id, {
+          sourceCoordinateSystem: "z_up",
+          visualBackend: "playcanvas-sog",
+          activeVisualRevision: active.revision,
+          visualPolicyVersion: active.policyVersion
+        });
       }
       continue;
     }
-    const aholoActive = aholoManifest.revisions.find(value => value.revision === aholoManifest.activeRevision);
-    if (!aholoActive) throw new Error(`数据集 ${dataset.id} 的 AHoLo manifest 缺少活动 revision`);
-    const aholoReport = await readAholoReport(datasetRoot, aholoActive);
-    if (aholoReport.source.coordinateSystem !== "tile_local_z_up") {
-      throw new Error(`数据集 ${dataset.id} 的 AHoLo report 缺少 tile_local_z_up 坐标审计`);
-    }
-    if (dataset.aholoVisualRevision !== aholoActive.revision || dataset.aholoPolicyVersion !== aholoActive.policyVersion || dataset.sourceCoordinateSystem !== "z_up") {
+    if (dataset.activeVisualRevision !== null || dataset.visualPolicyVersion !== null) {
       db.updateDataset(dataset.id, {
-        sourceCoordinateSystem: "z_up",
-        aholoVisualRevision: aholoActive.revision,
-        aholoPolicyVersion: aholoActive.policyVersion
+        activeVisualRevision: null,
+        visualPolicyVersion: null,
+        stage: "未发现当前官方 Streamed SOG；请从源 PLY 构建视觉"
       });
     }
   }
-}
-
-async function legacySourceIsAuditedZUp(datasetRoot: string) {
-  const candidates = [path.join(datasetRoot, "tiles", "build_summary.json")];
-  try {
-    const manifest = JSON.parse(await readFile(path.join(datasetRoot, "artifact-manifest.json"), "utf8")) as {
-      activeVisualRevision?: unknown;
-      visualRevisions?: Array<{ revision?: unknown; relativeTilesPath?: unknown }>;
-    };
-    const active = manifest.visualRevisions?.find(value => value.revision === manifest.activeVisualRevision);
-    if (typeof active?.relativeTilesPath === "string") candidates.unshift(path.join(datasetRoot, active.relativeTilesPath, "build_summary.json"));
-  } catch { /* Legacy layouts may not have a revision manifest. */ }
-  for (const filename of candidates) {
-    try {
-      const summary = JSON.parse(await readFile(filename, "utf8")) as { source_coordinate_system?: unknown };
-      if (summary.source_coordinate_system === "z_up") return true;
-    } catch { /* Try the next known legacy location. */ }
-  }
-  return false;
 }
 
 function invalidateMissionsUsingLabel(db: Database, datasetId: string, labelId: string) {

@@ -9,13 +9,12 @@ import { Database } from "./db.js";
 import { config } from "./config.js";
 import { CollisionRepository } from "./collision.js";
 import {
-  AHOLO_POLICY_VERSION, createAholoEszConversionPipeline, createAholoPipeline, prepareAholoEszMeta,
-  publishAholoRevision, validateAholoRevision, writeAholoReport
-} from "./aholo-artifacts.js";
+  PLAYCANVAS_OFFICIAL_LOD_RATIOS, PLAYCANVAS_POLICY_VERSION, publishPlayCanvasRevision,
+  validatePlayCanvasRevision, writePlayCanvasReport
+} from "./playcanvas-artifacts.js";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../node_modules");
 const splatCli = path.join(packageRoot, "@playcanvas/splat-transform/bin/cli.mjs");
-const aholoSplatCli = path.join(packageRoot, "@manycore/aholo-splat-transform/bin/cli.js");
 
 /** Guidance is advisory only: collision fidelity parameters are never changed without an operator retry. */
 export const COLLISION_VOXEL_GUIDANCE = Object.freeze({
@@ -116,9 +115,9 @@ export class ProcessingWorker {
       if (dataset.status === "rebuilding") {
         this.db.updateDataset(dataset.id, {
           status: "ready", progress: 100,
-          stage: dataset.aholoVisualRevision
-            ? "AHoLo 视觉重建失败，继续使用上一已发布版本"
-            : "AHoLo 视觉构建失败；碰撞、标签和航迹保持不变",
+          stage: dataset.activeVisualRevision
+            ? "PlayCanvas 视觉重建失败，继续使用上一已发布版本"
+            : "PlayCanvas 视觉构建失败；碰撞、标签和航迹保持不变",
           error: message.slice(0, 4000)
         });
       } else {
@@ -133,10 +132,10 @@ export class ProcessingWorker {
   private async process(dataset: Dataset, signal: AbortSignal) {
     signal.throwIfAborted();
     if (dataset.sourceCoordinateSystem !== "z_up") {
-      throw new Error("AHoLo-only 主线只接受已明确声明为 z_up 的 GraphDECO PLY；旧数据请先完成坐标审计");
+      throw new Error("PlayCanvas 主线只接受已明确声明为 z_up 的 GraphDECO PLY；旧数据请先完成坐标审计");
     }
     if (dataset.status === "rebuilding") {
-      await this.processAholoVisual(dataset, signal);
+      await this.processPlayCanvasVisual(dataset, signal);
       return;
     }
     const source = path.join(config.sourcesDir, `${dataset.id}.ply`);
@@ -147,50 +146,44 @@ export class ProcessingWorker {
     const destination = path.join(config.publishedDir, dataset.id);
     const previousPublished = path.join(root, "previous-published");
     await recoverInterruptedPublication(destination, previousPublished);
-    if (await hasValidCollisionArtifacts(collision)) {
-      this.db.updateDataset(dataset.id, {
-        status: "collision_processing", collisionStatus: "processing", progress: 55,
-        stage: "复用已完成的体素碰撞数据", error: null
-      });
-    } else {
-      await rm(collision, { recursive: true, force: true });
-      await mkdir(collision, { recursive: true });
-      this.db.updateDataset(dataset.id, {
-        status: "collision_processing", collisionStatus: "processing", progress: 15,
-        stage: "生成体素碰撞数据", error: null
-      });
-      await this.buildCollision(dataset, source, collision, signal);
-    }
+    await rm(collision, { recursive: true, force: true });
+    await mkdir(collision, { recursive: true });
+    this.db.updateDataset(dataset.id, {
+      status: "collision_processing", collisionStatus: "processing", progress: 15,
+      stage: "使用 splat-transform 生成体素碰撞数据", error: null
+    });
+    await this.buildCollision(dataset, source, collision, signal);
 
     signal.throwIfAborted();
-    await rm(path.join(output, "aholo-artifact-manifest.json"), { force: true });
-    await rm(path.join(output, "aholo-visual-revisions"), { recursive: true, force: true });
-    const revision = await this.buildAndPublishAholoVisual(dataset, signal, collision, output, false);
+    await rm(path.join(output, "visual-artifact-manifest.json"), { force: true });
+    await rm(path.join(output, "visual-revisions"), { recursive: true, force: true });
+    const revision = await this.buildAndPublishPlayCanvasVisual(dataset, signal, collision, output, false);
     await promotePublishedOutput(output, destination, previousPublished);
     this.collisions.invalidate(dataset.id);
     this.db.updateDataset(dataset.id, {
       status: "ready", collisionStatus: "ready", progress: 100, stage: "可视化与碰撞数据已发布", error: null,
-      aholoVisualRevision: revision, aholoPolicyVersion: AHOLO_POLICY_VERSION
+      visualBackend: "playcanvas-sog", activeVisualRevision: revision, visualPolicyVersion: PLAYCANVAS_POLICY_VERSION
     });
   }
 
-  private async processAholoVisual(dataset: Dataset, signal: AbortSignal) {
+  private async processPlayCanvasVisual(dataset: Dataset, signal: AbortSignal) {
     const source = path.join(config.sourcesDir, `${dataset.id}.ply`);
     await validatePly(source);
     const destination = path.join(config.publishedDir, dataset.id);
     const collisionDirectory = path.join(destination, "collision");
     await validateCollisionArtifacts(collisionDirectory);
-    const revision = await this.buildAndPublishAholoVisual(dataset, signal, collisionDirectory, destination, true);
+    const revision = await this.buildAndPublishPlayCanvasVisual(dataset, signal, collisionDirectory, destination, true);
     this.db.updateDataset(dataset.id, {
       status: "ready", collisionStatus: "ready", progress: 100,
-      stage: "AHoLo 视觉已发布，碰撞、标签和航迹保持不变",
+      stage: "PlayCanvas 官方 Streamed SOG 已发布，碰撞、标签和航迹保持不变",
       error: null,
-      aholoVisualRevision: revision,
-      aholoPolicyVersion: AHOLO_POLICY_VERSION
+      visualBackend: "playcanvas-sog",
+      activeVisualRevision: revision,
+      visualPolicyVersion: PLAYCANVAS_POLICY_VERSION
     });
   }
 
-  private async buildAndPublishAholoVisual(
+  private async buildAndPublishPlayCanvasVisual(
     dataset: Dataset,
     signal: AbortSignal,
     collisionDirectory: string,
@@ -199,57 +192,70 @@ export class ProcessingWorker {
   ) {
     const source = path.join(config.sourcesDir, `${dataset.id}.ply`);
     const revision = randomUUID();
-    const workRoot = path.join(config.workDir, dataset.id, "aholo-visual");
+    const workRoot = path.join(config.workDir, dataset.id, "playcanvas-visual");
     const stagedRoot = path.join(workRoot, revision);
-    const eszDirectory = path.join(stagedRoot, "esz");
-    const referenceDirectory = path.join(stagedRoot, "ply-reference");
+    const sogDirectory = path.join(stagedRoot, "sog");
+    const lodSourcesDirectory = path.join(workRoot, "lod-sources");
     await rm(workRoot, { recursive: true, force: true });
-    await mkdir(stagedRoot, { recursive: true });
+    await mkdir(sogDirectory, { recursive: true });
+    await mkdir(lodSourcesDirectory, { recursive: true });
 
     this.db.updateDataset(dataset.id, {
       status: rebuilding ? "rebuilding" : "tiling", progress: rebuilding ? 10 : 62,
-      stage: rebuilding ? "重建 AHoLo 无损 Chunk LOD；上一版本继续服务" : "构建 AHoLo 无损 Chunk LOD", error: null
+      stage: rebuilding ? "按官方原始流程重建 Streamed SOG；上一版本继续服务" : "按官方原始流程构建 Streamed SOG", error: null
     });
-    const referencePipelinePath = path.join(workRoot, "ply-reference-pipeline.json");
-    await writeFile(referencePipelinePath, `${JSON.stringify(createAholoPipeline(source, referenceDirectory), null, 2)}\n`);
-    await runProcess(process.execPath, [aholoSplatCli, referencePipelinePath], this.logger, dataset.id, signal);
-    signal.throwIfAborted();
+    const lodSources = [source];
+    const lodRatios = PLAYCANVAS_OFFICIAL_LOD_RATIOS;
+    for (let level = 1; level < lodRatios.length; level += 1) {
+      const ratio = lodRatios[level]!;
+      const outputPly = path.join(lodSourcesDirectory, `lod-${level}.ply`);
+      this.db.updateDataset(dataset.id, {
+        status: rebuilding ? "rebuilding" : "tiling",
+        progress: Math.round((rebuilding ? 12 : 64) + level / lodRatios.length * (rebuilding ? 48 : 18)),
+        stage: `按官方示例生成 LOD ${level}（${ratio * 100}%）`, error: null
+      });
+      await runProcess(process.execPath, [
+        splatCli, source, "--decimate", `${ratio * 100}%`, outputPly
+      ], this.logger, dataset.id, signal);
+      lodSources.push(outputPly);
+      signal.throwIfAborted();
+    }
 
     this.db.updateDataset(dataset.id, {
-      status: rebuilding ? "rebuilding" : "tiling", progress: rebuilding ? 58 : 82,
-      stage: "逐 Chunk 编码高精度 ESZ；每个 Chunk 完成后立即释放解码内存", error: null
+      status: rebuilding ? "rebuilding" : "tiling", progress: rebuilding ? 68 : 84,
+      stage: "使用 splat-transform 默认参数生成 Streamed SOG", error: null
     });
-    const referenceFiles = await prepareAholoEszMeta(referenceDirectory, eszDirectory);
-    const eszPipelinePath = path.join(workRoot, "esz-pipeline.json");
-    await writeFile(eszPipelinePath, `${JSON.stringify(createAholoEszConversionPipeline(referenceDirectory, eszDirectory, referenceFiles), null, 2)}\n`);
-    await runProcess(process.execPath, [aholoSplatCli, eszPipelinePath], this.logger, dataset.id, signal);
+    const lodArgs: string[] = [splatCli];
+    lodSources.forEach((filename, level) => lodArgs.push(filename, "--tag-lod", String(level)));
+    lodArgs.push(path.join(sogDirectory, "lod-meta.json"));
+    await runProcess(process.execPath, lodArgs, this.logger, dataset.id, signal);
     signal.throwIfAborted();
 
-    this.db.updateDataset(dataset.id, { status: rebuilding ? "rebuilding" : "tiling", progress: 92, stage: "校验 AHoLo LOD0、层级覆盖、SH 与碰撞 revision" });
-    const report = await validateAholoRevision({
+    this.db.updateDataset(dataset.id, { status: rebuilding ? "rebuilding" : "tiling", progress: 92, stage: "校验官方 Streamed SOG 完整性与来源" });
+    const report = await validatePlayCanvasRevision({
       datasetId: dataset.id,
       revision,
       sourcePath: source,
       collisionDirectory,
       stagedRoot,
-      toolVersion: await installedAholoTilerVersion()
+      toolVersion: await installedPlayCanvasTilerVersion()
     });
-    await writeAholoReport(stagedRoot, report);
+    await writePlayCanvasReport(stagedRoot, report);
     signal.throwIfAborted();
-    await publishAholoRevision({ datasetRoot, stagedRoot, report });
+    await publishPlayCanvasRevision({ datasetRoot, stagedRoot, report });
     await rm(workRoot, { recursive: true, force: true });
     return revision;
   }
 
   private async buildCollision(dataset: Dataset, source: string, collision: string, signal: AbortSignal) {
-    const args = [splatCli, "-g", config.gpuDevice, source, "--rotate", "0,0,180"];
+    const args = [splatCli, source];
     args.push("--voxel-size", String(dataset.voxelSize), "--voxel-opacity", String(dataset.voxelOpacity));
-    if (dataset.sceneType === "outdoor") args.push("--voxel-floor-fill", "1.6");
+    if (dataset.sceneType === "outdoor") args.push("--voxel-floor-fill");
     else {
       if (!dataset.indoorSeed) throw new Error("室内场景必须提供自由空间 indoorSeed 才能生成封闭碰撞体");
-      args.push("--seed-pos", `${dataset.indoorSeed.x},${dataset.indoorSeed.y},${dataset.indoorSeed.z}`, "--voxel-external-fill", "1.6");
+      args.push("--seed-pos", `${dataset.indoorSeed.x},${dataset.indoorSeed.y},${dataset.indoorSeed.z}`, "--voxel-external-fill");
     }
-    args.push("--collision-mesh", "faces", path.join(collision, "scene.voxel.json"));
+    args.push("--collision-mesh", path.join(collision, "scene.voxel.json"));
     try {
       await runProcess(process.execPath, args, this.logger, dataset.id, signal);
     } catch (error) {
@@ -288,11 +294,6 @@ async function validateCollisionArtifacts(directory: string) {
   if (metadata.coordinateFrame !== "tile_local_z_up") throw new Error("碰撞产物缺少 tile_local_z_up 坐标契约");
 }
 
-async function hasValidCollisionArtifacts(directory: string) {
-  try { await validateCollisionArtifacts(directory); return true; }
-  catch { return false; }
-}
-
 async function pathExists(filename: string) {
   try { await stat(filename); return true; } catch { return false; }
 }
@@ -323,11 +324,11 @@ async function promotePublishedOutput(output: string, destination: string, previ
   if (hasPrevious) await rm(previousPublished, { recursive: true, force: true });
 }
 
-async function installedAholoTilerVersion() {
+async function installedPlayCanvasTilerVersion() {
   const value = JSON.parse(
-    await readFile(path.join(packageRoot, "@manycore/aholo-splat-transform", "package.json"), "utf8")
+    await readFile(path.join(packageRoot, "@playcanvas/splat-transform", "package.json"), "utf8")
   ) as { version?: unknown };
-  if (typeof value.version !== "string" || !value.version) throw new Error("无法读取 AHoLo 转换器版本");
+  if (typeof value.version !== "string" || !value.version) throw new Error("无法读取 PlayCanvas 转换器版本");
   return value.version;
 }
 

@@ -12,6 +12,7 @@ export const placementSchema = geoPointSchema.extend({
 
 export const datasetStatusSchema = z.enum(["created", "uploading", "queued", "tiling", "collision_processing", "rebuilding", "ready", "failed"]);
 export const collisionStatusSchema = z.enum(["pending", "processing", "ready", "failed"]);
+export const visualBackendSchema = z.literal("playcanvas-sog");
 export const sceneTypeSchema = z.enum(["outdoor", "indoor"]);
 // Collision generation currently consumes GraphDECO's log-scale/logit-opacity PLY convention.
 export const inputConventionSchema = z.literal("graphdeco");
@@ -112,8 +113,9 @@ export interface Dataset extends Omit<CreateDataset, "sourceCoordinateSystem"> {
   id: string;
   /** Null only for legacy records whose source basis has not yet been audited. */
   sourceCoordinateSystem: z.infer<typeof sourceCoordinateSystemSchema> | null;
-  aholoVisualRevision: string | null;
-  aholoPolicyVersion: string | null;
+  visualBackend: z.infer<typeof visualBackendSchema>;
+  activeVisualRevision: string | null;
+  visualPolicyVersion: string | null;
   status: z.infer<typeof datasetStatusSchema>;
   collisionStatus: z.infer<typeof collisionStatusSchema>;
   progress: number;
@@ -124,18 +126,18 @@ export interface Dataset extends Omit<CreateDataset, "sourceCoordinateSystem"> {
   updatedAt: string;
 }
 
-export interface AholoLodLevelReport {
+export interface PlayCanvasLodLevelReport {
   level: number;
-  precision: number;
-  scaleBoost: number;
-  permanent: boolean;
-  merged: boolean;
+  ratio: number;
   splatCount: number;
+  chunkCount: number;
+  bytes: number;
 }
 
-export interface AholoVisualReport {
-  schemaVersion: 1;
+export interface PlayCanvasVisualReport {
+  schemaVersion: 2;
   datasetId: string;
+  visualBackend: "playcanvas-sog";
   visualRevision: string;
   policyVersion: string;
   source: {
@@ -150,35 +152,63 @@ export interface AholoVisualReport {
     renderToLocal: "local=(x,-z,y)";
   };
   artifact: {
-    eszBytes: number;
-    eszPayloadSha256: string;
-    referencePlyBytes: number;
-    referencePlyPayloadSha256: string;
+    bytes: number;
+    sha256: string;
     chunkCount: number;
-    referenceChunkCount: number;
+    lodMetaSha256: string;
   };
   collisionRevision: string;
-  tool: { name: "@manycore/aholo-splat-transform"; version: string };
-  levels: AholoLodLevelReport[];
+  tool: { name: "@playcanvas/splat-transform"; version: string };
+  policy: {
+    lodChunkCount: number;
+    lodChunkExtent: number;
+    fineLodFormat: "sog";
+    coarseLodFormat: "sog";
+    ratios: number[];
+    spatialTreeDepth?: number;
+    spatialNodeCount?: number;
+    spatialLeafCount?: number;
+  };
+  levels: PlayCanvasLodLevelReport[];
   builtAt: string;
 }
 
 export interface RenderManifest {
-  schemaVersion: 1;
+  schemaVersion: 2;
   datasetId: string;
+  renderer: "playcanvas";
+  visualBackend: "playcanvas-sog";
   activeVisualRevision: string;
   source: { sha256: string; splatCount: number; shDegree: number };
   coordinateFrame: "tile_local_z_up";
   collisionRevision: string;
   placement: Placement;
-  aholo: {
+  playcanvas: {
     lodMetaUrl: string;
-    referenceLodMetaUrl: string;
     reportUrl: string;
     policyVersion: string;
-    maxBudget: 6000000;
-    levels: AholoLodLevelReport[];
+    levels: PlayCanvasLodLevelReport[];
     transform: { localToRender: "render=(x,z,-y)"; renderToLocal: "local=(x,-z,y)" };
+  };
+}
+
+/** Coarse, read-only telemetry from the local Spikive server process and host. */
+export interface RuntimeTelemetry {
+  sampledAt: string;
+  host: {
+    cpuPercent: number | null;
+    logicalCores: number;
+    memoryUsedBytes: number;
+    memoryTotalBytes: number;
+  };
+  process: {
+    /** Process CPU normalized to the whole host, so the value stays in the 0-100 range. */
+    cpuPercent: number | null;
+    rssBytes: number;
+    heapUsedBytes: number;
+    heapTotalBytes: number;
+    externalBytes: number;
+    arrayBuffersBytes: number;
   };
 }
 

@@ -61,7 +61,10 @@ try {
 
   const datasetColumns = new Set(db.prepare("PRAGMA table_info(datasets)").all().map(row => String(row.name)));
   const sourceCoordinateColumn = datasetColumns.has("source_coordinate_system") ? "source_coordinate_system" : "NULL AS source_coordinate_system";
-  const datasets = db.prepare(`SELECT id, status, collision_status, ${sourceCoordinateColumn}, aholo_visual_revision, aholo_policy_version FROM datasets`).all();
+  const visualBackendColumn = datasetColumns.has("visual_backend") ? "visual_backend" : "'playcanvas-sog' AS visual_backend";
+  const activeVisualColumn = datasetColumns.has("active_visual_revision") ? "active_visual_revision" : "NULL AS active_visual_revision";
+  const visualPolicyColumn = datasetColumns.has("visual_policy_version") ? "visual_policy_version" : "NULL AS visual_policy_version";
+  const datasets = db.prepare(`SELECT id, status, collision_status, ${sourceCoordinateColumn}, ${visualBackendColumn}, ${activeVisualColumn}, ${visualPolicyColumn} FROM datasets`).all();
   const labels = db.prepare("SELECT id, dataset_id FROM labels").all();
   const missions = db.prepare("SELECT id, dataset_id, start_label_id, label_ids, status FROM missions").all();
   const waypoints = db.prepare(`
@@ -140,39 +143,60 @@ try {
         if (!(await exists(artifact))) addFinding("MISSING_ARTIFACT", `数据集 ${datasetId} 缺少 ${parts.join("/")}`);
       }
       const datasetRoot = path.join(dataDir, "published", datasetId);
-      const aholoManifestPath = path.join(datasetRoot, "aholo-artifact-manifest.json");
-      if (await exists(aholoManifestPath)) {
-        try {
-          const manifest = JSON.parse(await readFile(aholoManifestPath, "utf8"));
-          const active = Array.isArray(manifest.revisions)
-            ? manifest.revisions.find(value => value?.revision === manifest.activeRevision)
-            : null;
-          if (!active || typeof active.relativeRootPath !== "string") {
-            addFinding("INVALID_AHOLO_MANIFEST", `数据集 ${datasetId} 的活动 AHoLo revision 无效`);
-          } else {
-            const revisionIds = new Set(manifest.revisions.map(value => String(value.revision)));
-            if (String(dataset.aholo_visual_revision ?? "") !== String(active.revision)) {
-              addFinding("AHOLO_REVISION_MISMATCH", `数据集 ${datasetId} 的数据库 AHoLo revision 与 manifest 不一致`);
-            }
-            if (String(dataset.aholo_policy_version ?? "") !== String(active.policyVersion ?? "")) {
-              addFinding("AHOLO_POLICY_MISMATCH", `数据集 ${datasetId} 的数据库 AHoLo 策略与 manifest 不一致`);
-            }
-            for (const name of ["esz/lod-meta.json", "ply-reference/lod-meta.json", "aholo-report.json"]) {
-              if (!(await exists(path.join(datasetRoot, active.relativeRootPath, name)))) {
-                addFinding("MISSING_AHOLO_ARTIFACT", `数据集 ${datasetId} 的活动 AHoLo revision 缺少 ${name}`);
+      if (String(dataset.visual_backend) === "playcanvas-sog") {
+        const manifestPath = path.join(datasetRoot, "visual-artifact-manifest.json");
+        if (!(await exists(manifestPath))) {
+          addFinding("MISSING_VISUAL_MANIFEST", `数据集 ${datasetId} 已就绪但缺少 PlayCanvas manifest`);
+        } else {
+          try {
+            const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+            const active = Array.isArray(manifest.revisions)
+              ? manifest.revisions.find(value => value?.revision === manifest.activeRevision)
+              : null;
+            if (!active || typeof active.relativeRootPath !== "string") {
+              addFinding("INVALID_VISUAL_MANIFEST", `数据集 ${datasetId} 的活动 PlayCanvas revision 无效`);
+            } else {
+              const revisionIds = new Set(manifest.revisions.map(value => String(value.revision)));
+              if (String(dataset.active_visual_revision ?? "") !== String(active.revision)) {
+                addFinding("VISUAL_REVISION_MISMATCH", `数据集 ${datasetId} 的数据库 PlayCanvas revision 与 manifest 不一致`);
+              }
+              if (String(dataset.visual_policy_version ?? "") !== String(active.policyVersion ?? "")) {
+                addFinding("VISUAL_POLICY_MISMATCH", `数据集 ${datasetId} 的数据库 PlayCanvas 策略与 manifest 不一致`);
+              }
+              for (const name of ["sog/lod-meta.json", "visual-report.json"]) {
+                if (!(await exists(path.join(datasetRoot, active.relativeRootPath, name)))) {
+                  addFinding("MISSING_VISUAL_ARTIFACT", `数据集 ${datasetId} 的活动 PlayCanvas revision 缺少 ${name}`);
+                }
+              }
+              if (String(active.policyVersion) === "playcanvas-upstream-streamed-sog-v1") {
+                try {
+                  const revisionRoot = path.join(datasetRoot, active.relativeRootPath);
+                  const [report, lodMeta] = await Promise.all([
+                    readFile(path.join(revisionRoot, "visual-report.json"), "utf8").then(JSON.parse),
+                    readFile(path.join(revisionRoot, "sog", "lod-meta.json"), "utf8").then(JSON.parse)
+                  ]);
+                  if (report?.tool?.version !== "3.3.0" || report?.policy?.fineLodFormat !== "sog" || report?.policy?.coarseLodFormat !== "sog") {
+                    addFinding("VISUAL_UPSTREAM", `数据集 ${datasetId} 不是官方 splat-transform 3.3.0 默认 Streamed SOG`);
+                  }
+                  if (!Array.isArray(lodMeta?.filenames) || lodMeta.filenames.some(filename => typeof filename !== "string" || path.basename(filename) !== "meta.json")) {
+                    addFinding("VISUAL_PAYLOAD_FORMAT", `数据集 ${datasetId} 的活动层包含非标准 Streamed SOG Chunk`);
+                  }
+                } catch (error) {
+                  addFinding("VISUAL_REPORT", `数据集 ${datasetId} 的官方视觉报告无法审计：${String(error)}`);
+                }
+              }
+              for (const entry of await listChildren(path.join(datasetRoot, "visual-revisions"))) {
+                if (entry.isDirectory() && !revisionIds.has(entry.name)) {
+                  addFinding("ORPHAN_VISUAL_REVISION", `数据集 ${datasetId} 的 visual-revisions/${entry.name} 不在 manifest 中`);
+                }
               }
             }
-            for (const entry of await listChildren(path.join(datasetRoot, "aholo-visual-revisions"))) {
-              if (entry.isDirectory() && !revisionIds.has(entry.name)) {
-                addFinding("ORPHAN_AHOLO_REVISION", `数据集 ${datasetId} 的 aholo-visual-revisions/${entry.name} 不在 manifest 中`);
-              }
-            }
+          } catch (error) {
+            addFinding("INVALID_VISUAL_MANIFEST", `数据集 ${datasetId} 的 PlayCanvas manifest 无法读取：${String(error)}`);
           }
-        } catch (error) {
-          addFinding("INVALID_AHOLO_MANIFEST", `数据集 ${datasetId} 的 AHoLo manifest 无法读取：${String(error)}`);
         }
-      } else if (status === "ready" || dataset.aholo_visual_revision != null) {
-        addFinding("MISSING_AHOLO_MANIFEST", `数据集 ${datasetId} 已就绪但缺少 AHoLo manifest`);
+      } else {
+        addFinding("UNSUPPORTED_VISUAL_BACKEND", `数据集 ${datasetId} 仍引用已退出主线的 Renderer：${String(dataset.visual_backend)}`);
       }
       if (dataset.source_coordinate_system !== "z_up") addFinding("UNKNOWN_SOURCE_BASIS", `数据集 ${datasetId} 未记录 z_up 源坐标约定`);
     }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dataset, InspectionLabel, Mission, SurfaceHit } from "@spikive/shared";
 import { api } from "./api";
-import { AholoScene } from "./AholoScene";
+import { PlayCanvasScene } from "./PlayCanvasScene";
 import { DatasetPanel } from "./components/DatasetPanel";
 import { InspectionLabelPopup } from "./components/InspectionLabelPopup";
 import { LabelPanel } from "./components/LabelPanel";
@@ -26,14 +26,14 @@ export default function App() {
   const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
   const [message, setMessage] = useState("创建数据集并上传 Gaussian PLY");
-  const [aholoRuntimeFailed, setAholoRuntimeFailed] = useState(false);
+  const [rendererRuntimeFailed, setRendererRuntimeFailed] = useState(false);
   const initializedDatasetSelection = useRef(false);
   const reportedPollingFailure = useRef(false);
   const focusSequence = useRef(0);
   const dataset = datasets.find(value => value.id === selectedId) ?? null;
   const selectedLabel = labels.find(value => value.id === selectedLabelId && value.datasetId === selectedId) ?? null;
 
-  useEffect(() => setAholoRuntimeFailed(false), [dataset?.id, dataset?.aholoVisualRevision]);
+  useEffect(() => setRendererRuntimeFailed(false), [dataset?.id, dataset?.activeVisualRevision]);
   useEffect(() => {
     setSelectedLabelId(current => current && labels.some(label => label.id === current && label.datasetId === selectedId) ? current : null);
   }, [labels, selectedId]);
@@ -145,7 +145,7 @@ export default function App() {
 
   const deleteDataset = useCallback(async (id: string) => {
     const target = datasets.find(value => value.id === id);
-    if (!target || !window.confirm(`永久删除“${target.name}”？\n\nPLY、AHoLo 视觉、碰撞数据、巡检标签和全部航迹任务都会被删除，且无法恢复。`)) return;
+    if (!target || !window.confirm(`永久删除“${target.name}”？\n\nPLY、PlayCanvas 视觉、碰撞数据、巡检标签和全部航迹任务都会被删除，且无法恢复。`)) return;
     try {
       await api.deleteDataset(id);
       if (selectedId === id) {
@@ -171,12 +171,12 @@ export default function App() {
     setMessage(`已按人工确认的 ${voxelSize} m 体素尺寸重新排队`);
   }, [refreshDatasets]);
 
-  const buildAholoVisuals = useCallback(async (id: string) => {
+  const buildPlayCanvasVisuals = useCallback(async (id: string) => {
     const target = datasets.find(value => value.id === id);
-    if (!target || !window.confirm(`为“${target.name}”${target.aholoVisualRevision ? "重建" : "构建"} AHoLo Chunk LOD？\n\n将串行生成高精度 ESZ 和无损 PLY 对照；碰撞、标签和航迹不会改变。`)) return;
+    if (!target || !window.confirm(`为“${target.name}”${target.activeVisualRevision ? "重建" : "构建"} PlayCanvas 官方 Streamed SOG？\n\n视觉将使用 splat-transform 官方原始流程和默认参数；碰撞、标签和航迹不会改变。`)) return;
     await api.rebuildDatasetVisuals(id);
     await refreshDatasets();
-    setMessage(`“${target.name}”已开始${target.aholoVisualRevision ? "重建" : "构建"} AHoLo 视觉`);
+    setMessage(`“${target.name}”已开始${target.activeVisualRevision ? "重建" : "构建"} PlayCanvas 视觉`);
   }, [datasets, refreshDatasets]);
 
   const deleteMission = useCallback(async (id: string) => {
@@ -226,7 +226,7 @@ export default function App() {
           }}
           onClearView={clearModelView}
           onRetry={retryDataset}
-          onBuildAholo={buildAholoVisuals}
+          onBuildVisuals={buildPlayCanvasVisuals}
           onDelete={id => void deleteDataset(id)}
           onMessage={setMessage}
         />}
@@ -256,8 +256,8 @@ export default function App() {
       </section>
     </aside>
     <main>
-      {!aholoRuntimeFailed
-        ? <AholoScene
+      {!rendererRuntimeFailed
+        ? <PlayCanvasScene
             dataset={dataset}
             labels={labels}
             mission={activeMission}
@@ -268,14 +268,14 @@ export default function App() {
             onPickLabel={onPickLabel}
             onSelectLabel={selectInspectionLabel}
             onMessage={setMessage}
-            onFatal={reason => { setAholoRuntimeFailed(true); setMessage(`AHoLo 已有界停止：${reason}`); }}
+            onFatal={reason => { setRendererRuntimeFailed(true); setMessage(`PlayCanvas 已有界停止：${reason}`); }}
           />
         : <div className="scene-empty scene-error">
-            <span>AHoLo 渲染已停止，业务数据未受影响。</span>
-            <button type="button" className="secondary" onClick={() => setAholoRuntimeFailed(false)}>重新加载 AHoLo</button>
+            <span>PlayCanvas 渲染已停止，业务数据未受影响。</span>
+            <button type="button" className="secondary" onClick={() => setRendererRuntimeFailed(false)}>重新加载 PlayCanvas</button>
           </div>}
       <div className="legend">
-        <span><i className="orange" />GS 巡检标签</span>
+        <span><i className="red" />GS 巡检标签</span>
         <span><i className="red" />标签航迹点</span>
         <span><i className="blue" />途经点</span>
         <span><i className="green" />已校验航线</span>

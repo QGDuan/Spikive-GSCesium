@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { isCollisionMutableGridLimit, recommendedCollisionVoxelSize, validatePly } from "./worker.js";
 
-describe("AHoLo-only processing", () => {
+describe("official PlayCanvas visual pipeline with independent voxel processing", () => {
   it("only suggests a coarser collision voxel for explicit mutable-grid safety failures", () => {
     const memoryError = new Error("Voxel mutation would require approximately 1.51K MiB of mutable-grid storage, exceeding the 1024 MiB safety limit.");
     expect(recommendedCollisionVoxelSize(memoryError, 0.1)).toBe(0.14);

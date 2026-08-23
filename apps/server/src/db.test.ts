@@ -34,8 +34,8 @@ describe("database persistence", () => {
     }
   });
 
-  it("adds new fields without guessing a legacy dataset coordinate system or dropping old visual columns", () => {
-    const directory = mkdtempSync(path.join(tmpdir(), "spikive-db-aholo-migration-"));
+  it("adds current fields without guessing a legacy dataset coordinate system or dropping unknown old columns", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "spikive-db-legacy-migration-"));
     directories.push(directory);
     const filename = path.join(directory, "test.sqlite");
     const legacy = new DatabaseSync(filename);
@@ -79,7 +79,8 @@ describe("database persistence", () => {
       inputConvention: "graphdeco", sourceCoordinateSystem: "z_up", voxelSize: 0.1, voxelOpacity: 0.1, indoorSeed: null,
       placement: { longitude: 0, latitude: 0, height: 0, heading: 0, pitch: 0, roll: 0, scale: 1 },
       status: "ready", collisionStatus: "ready", progress: 100, stage: "ready", error: null,
-      uploadId: null, aholoVisualRevision: null, aholoPolicyVersion: null, createdAt: now, updatedAt: now
+      uploadId: null, visualBackend: "playcanvas-sog", activeVisualRevision: null, visualPolicyVersion: null,
+      createdAt: now, updatedAt: now
     };
     db.insertDataset(dataset);
 
@@ -118,7 +119,8 @@ describe("database persistence", () => {
       inputConvention: "graphdeco", sourceCoordinateSystem: "z_up", voxelSize: 0.1, voxelOpacity: 0.1, indoorSeed: null,
       placement: { longitude: 0, latitude: 0, height: 0, heading: 0, pitch: 0, roll: 0, scale: 1 },
       status: "ready", collisionStatus: "ready", progress: 100, stage: "ready", error: null,
-      uploadId: null, aholoVisualRevision: null, aholoPolicyVersion: null, createdAt: now, updatedAt: now
+      uploadId: null, visualBackend: "playcanvas-sog", activeVisualRevision: null, visualPolicyVersion: null,
+      createdAt: now, updatedAt: now
     });
     const labelId = randomUUID();
     db.insertLabel({ id: labelId, datasetId, title: "label", description: "", category: "inspection", color: "#fff", positionLocal: { x: 0, y: 0, z: 0 }, surfaceNormalLocal: null, snapDistance: null, resolutionStatus: "pending", createdAt: now, updatedAt: now });
@@ -149,7 +151,8 @@ describe("database persistence", () => {
       inputConvention: "graphdeco", sourceCoordinateSystem: "z_up", voxelSize: 0.1, voxelOpacity: 0.1, indoorSeed: null,
       placement: { longitude: 0, latitude: 0, height: 0, heading: 0, pitch: 0, roll: 0, scale: 1 },
       status: "ready", collisionStatus: "ready", progress: 100, stage: "ready", error: null,
-      uploadId: null, aholoVisualRevision: null, aholoPolicyVersion: null, createdAt: now, updatedAt: now
+      uploadId: null, visualBackend: "playcanvas-sog", activeVisualRevision: null, visualPolicyVersion: null,
+      createdAt: now, updatedAt: now
     });
     db.insertMission({
       id: missionId, datasetId, name: "legacy route", homeLocal: { x: 0, y: 0, z: 1 }, startLabelId: null, labelIds: [],

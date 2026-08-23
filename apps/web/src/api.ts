@@ -1,4 +1,4 @@
-import type { ApiError, CreateDataset, CreateLabel, CreateMission, Dataset, InspectionLabel, Mission, RaycastRequest, RenderManifest, SurfaceHit } from "@spikive/shared";
+import type { ApiError, CreateDataset, CreateLabel, CreateMission, Dataset, InspectionLabel, Mission, RaycastRequest, RenderManifest, RuntimeTelemetry, SurfaceHit } from "@spikive/shared";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -17,6 +17,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  runtimeTelemetry: (signal?: AbortSignal) => request<RuntimeTelemetry>("/api/runtime-telemetry", { signal, cache: "no-store" }),
   datasets: () => request<Dataset[]>("/api/datasets"),
   createDataset: (value: CreateDataset) => request<Dataset>("/api/datasets", { method: "POST", body: JSON.stringify(value) }),
   updateDataset: (id: string, value: { voxelSize: number }) => request<Dataset>(`/api/datasets/${id}`, { method: "PATCH", body: JSON.stringify(value) }),

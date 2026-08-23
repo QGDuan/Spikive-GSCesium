@@ -34,7 +34,8 @@ export class Database {
         voxel_size REAL NOT NULL, voxel_opacity REAL NOT NULL, indoor_seed TEXT,
         placement TEXT NOT NULL, status TEXT NOT NULL, collision_status TEXT NOT NULL,
         progress INTEGER NOT NULL DEFAULT 0, stage TEXT NOT NULL DEFAULT '', error TEXT,
-        upload_id TEXT, aholo_visual_revision TEXT, aholo_policy_version TEXT,
+        upload_id TEXT,
+        visual_backend TEXT NOT NULL DEFAULT 'playcanvas-sog', active_visual_revision TEXT, visual_policy_version TEXT,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS labels (
@@ -66,13 +67,20 @@ export class Database {
 
   private migrateDatasetVisualFields() {
     const columns = this.sqlite.prepare("PRAGMA table_info(datasets)").all() as Array<{ name: string }>;
+    const hadVisualBackend = columns.some(column => column.name === "visual_backend");
     if (!columns.some(column => column.name === "source_coordinate_system")) this.sqlite.exec("ALTER TABLE datasets ADD COLUMN source_coordinate_system TEXT;");
-    if (!columns.some(column => column.name === "aholo_visual_revision")) {
-      this.sqlite.exec("ALTER TABLE datasets ADD COLUMN aholo_visual_revision TEXT;");
+    if (!columns.some(column => column.name === "visual_backend")) {
+      this.sqlite.exec("ALTER TABLE datasets ADD COLUMN visual_backend TEXT NOT NULL DEFAULT 'playcanvas-sog';");
     }
-    if (!columns.some(column => column.name === "aholo_policy_version")) {
-      this.sqlite.exec("ALTER TABLE datasets ADD COLUMN aholo_policy_version TEXT;");
+    if (!columns.some(column => column.name === "active_visual_revision")) {
+      this.sqlite.exec("ALTER TABLE datasets ADD COLUMN active_visual_revision TEXT;");
     }
+    if (!columns.some(column => column.name === "visual_policy_version")) {
+      this.sqlite.exec("ALTER TABLE datasets ADD COLUMN visual_policy_version TEXT;");
+    }
+    // Older Cesium builds used active_visual_revision for 3D Tiles. Never treat
+    // that value as a PlayCanvas SOG revision merely because the column name matches.
+    if (!hadVisualBackend) this.sqlite.exec("UPDATE datasets SET active_visual_revision=NULL, visual_policy_version=NULL;");
   }
 
   private migrateMissionStartLabels() {
@@ -127,15 +135,15 @@ export class Database {
       INSERT INTO datasets (
         id, name, source_file_name, source_size, scene_type, input_convention,
         source_coordinate_system, voxel_size, voxel_opacity, indoor_seed, placement, status, collision_status,
-        progress, stage, error, upload_id, aholo_visual_revision, aholo_policy_version,
+        progress, stage, error, upload_id, visual_backend, active_visual_revision, visual_policy_version,
         created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       dataset.id, dataset.name, dataset.sourceFileName, dataset.sourceSize, dataset.sceneType,
       dataset.inputConvention, dataset.sourceCoordinateSystem, dataset.voxelSize, dataset.voxelOpacity,
       dataset.indoorSeed ? JSON.stringify(dataset.indoorSeed) : null, JSON.stringify(dataset.placement),
       dataset.status, dataset.collisionStatus, dataset.progress, dataset.stage, dataset.error,
-      dataset.uploadId, dataset.aholoVisualRevision, dataset.aholoPolicyVersion,
+      dataset.uploadId, dataset.visualBackend, dataset.activeVisualRevision, dataset.visualPolicyVersion,
       dataset.createdAt, dataset.updatedAt
     );
   }
@@ -143,10 +151,11 @@ export class Database {
     const current = this.getDataset(id);
     if (!current) return null;
     const next = { ...current, ...values, updatedAt: new Date().toISOString() };
-    this.sqlite.prepare(`UPDATE datasets SET name=?,source_coordinate_system=?,voxel_size=?,voxel_opacity=?,indoor_seed=?,placement=?,status=?,collision_status=?,progress=?,stage=?,error=?,upload_id=?,aholo_visual_revision=?,aholo_policy_version=?,updated_at=? WHERE id=?`).run(
+    this.sqlite.prepare(`UPDATE datasets SET name=?,source_coordinate_system=?,voxel_size=?,voxel_opacity=?,indoor_seed=?,placement=?,status=?,collision_status=?,progress=?,stage=?,error=?,upload_id=?,visual_backend=?,active_visual_revision=?,visual_policy_version=?,updated_at=? WHERE id=?`).run(
       next.name, next.sourceCoordinateSystem, next.voxelSize, next.voxelOpacity, next.indoorSeed ? JSON.stringify(next.indoorSeed) : null,
       JSON.stringify(next.placement), next.status, next.collisionStatus, next.progress, next.stage,
-      next.error, next.uploadId, next.aholoVisualRevision, next.aholoPolicyVersion, next.updatedAt, id
+      next.error, next.uploadId, next.visualBackend, next.activeVisualRevision, next.visualPolicyVersion,
+      next.updatedAt, id
     );
     return next;
   }
@@ -282,8 +291,9 @@ const datasetFromRow = (row: Row): Dataset => ({
   collisionStatus: row.collision_status as Dataset["collisionStatus"], progress: Number(row.progress),
   stage: String(row.stage), error: row.error ? String(row.error) : null,
   uploadId: row.upload_id ? String(row.upload_id) : null,
-  aholoVisualRevision: row.aholo_visual_revision ? String(row.aholo_visual_revision) : null,
-  aholoPolicyVersion: row.aholo_policy_version ? String(row.aholo_policy_version) : null,
+  visualBackend: "playcanvas-sog",
+  activeVisualRevision: row.active_visual_revision ? String(row.active_visual_revision) : null,
+  visualPolicyVersion: row.visual_policy_version ? String(row.visual_policy_version) : null,
   createdAt: String(row.created_at), updatedAt: String(row.updated_at)
 });
 const labelFromRow = (row: Row): InspectionLabel => ({

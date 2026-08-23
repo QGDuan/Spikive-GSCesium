@@ -1,12 +1,12 @@
 import type { Vec3 } from "@spikive/shared";
 
-/** Fixed Rx(-90°): dataset-local Z-up -> AHoLo render Y-up. */
-export function localToAholo(value: Vec3): Vec3 {
+/** Fixed Rx(-90°): dataset-local Z-up -> PlayCanvas render Y-up. */
+export function localToRender(value: Vec3): Vec3 {
   return { x: value.x, y: value.z, z: -value.y };
 }
 
-/** Exact inverse of localToAholo. */
-export function aholoToLocal(value: Vec3): Vec3 {
+/** Exact inverse of localToRender. */
+export function renderToLocal(value: Vec3): Vec3 {
   return { x: value.x, y: -value.z, z: value.y };
 }
 

@@ -278,7 +278,7 @@ export class CollisionRepository {
 
     // Frozen releases wrote collision data before coordinateFrame was embedded
     // in the voxel metadata. Keep that read-only compatibility path, but never
-    // make a new AHoLo dataset depend on the retired visual artifact directory.
+    // make a new dataset depend on any retired visual artifact directory.
     const summary = JSON.parse(await readFile(path.join(this.publishedDir, datasetId, "tiles", "build_summary.json"), "utf8")) as { source_coordinate_system?: string };
     return VoxelCollisionWorld.load(jsonPath, summary.source_coordinate_system);
   }

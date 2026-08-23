@@ -4,6 +4,8 @@
 
 `GET /healthz` 返回服务状态、转换开关以及碰撞 SVO LRU 缓存的 `entries`、`bytes`、`maximumBytes`。
 
+`GET /api/runtime-telemetry` 返回只读的宿主 CPU/RAM 与 Node 服务进程 CPU/RSS/Heap。CPU 是相邻请求之间的采样值，首次请求可以为 `null`；进程 CPU 按整台宿主机的逻辑核心容量归一化到 0–100%。接口不启动后台定时器，不返回主机名、PID、路径或系统 GPU 信息。
+
 ## 数据集与上传
 
 | 方法 | 路径 | 说明 |
@@ -12,24 +14,24 @@
 | `POST` | `/api/datasets` | 创建数据集和上传元数据 |
 | `GET/PATCH/DELETE` | `/api/datasets/:id` | 详情、摆放/处理参数更新、删除 |
 | `POST` | `/api/datasets/:id/retry` | 重试失败任务 |
-| `POST` | `/api/datasets/:id/rebuild-visuals` | 按固定 AHoLo 策略构建或重建 ESZ + 无损 PLY Chunk；不重建碰撞 |
+| `POST` | `/api/datasets/:id/rebuild-visuals` | 用未修改的 splat-transform 3.3.0 官方示例流程重建 Streamed SOG；不接收视觉参数，不重建碰撞 |
 | tus | `/api/uploads` | 最大 5 GiB 断点续传；metadata 必须含 `datasetId` |
-| `GET` | `/api/datasets/:id/render-manifest` | AHoLo 活动视觉的无缓存清单、坐标契约与碰撞 revision |
-| `GET` | `/api/datasets/:id/aholo-visual-revisions/:revision/:format/lod-meta.json` | AHoLo ESZ/PLY 版本化 LOD 清单 |
-| `GET` | `/api/datasets/:id/aholo-visual-revisions/:revision/:format/*` | 不可变 ESZ/PLY Chunk，缓存一年 |
-| `GET` | `/api/datasets/:id/aholo-visual-revisions/:revision/report` | AHoLo 构建与覆盖质量报告 |
-| `POST` | `/api/datasets/:id/aholo-visual-revisions/:revision/activate` | 切换到仍在七天保留期内且摘要匹配的 AHoLo revision |
+| `GET` | `/api/datasets/:id/render-manifest` | PlayCanvas 活动视觉、坐标契约、LOD 统计与碰撞 revision；禁止旧缓存 |
+| `GET` | `/api/datasets/:id/visual-revisions/:revision/sog/lod-meta.json` | 官方 Streamed SOG 清单；禁止旧缓存 |
+| `GET` | `/api/datasets/:id/visual-revisions/:revision/sog/*` | 官方不可变 SOG Chunk，缓存一年 |
+| `GET` | `/api/datasets/:id/visual-revisions/:revision/report` | 来源摘要、上游版本、层级/Chunk/字节统计与碰撞 revision |
+| `POST` | `/api/datasets/:id/visual-revisions/:revision/activate` | 切换到仍在七天保留期内且摘要匹配的 PlayCanvas revision |
 | `GET` | `/api/datasets/:id/collision/*` | 碰撞调试资源 |
 
 创建数据集的关键字段：`sceneType`、`inputConvention`、`sourceCoordinateSystem`、`voxelSize`、`voxelOpacity`、`placement`。当前 `inputConvention` 固定为 `graphdeco`，`sourceCoordinateSystem` 固定为 `z_up`；室内模式还必须提供已知自由空间 `indoorSeed`。
 
 `voxelSize`、`voxelOpacity` 和 `indoorSeed` 只允许在 `created` 或 `failed` 状态修改；上传或发布后修改但不重建碰撞体会造成配置与产物不一致，因此服务返回 `409`。名称和 WGS84 摆放不受此限制。请求体不满足 Zod 契约时统一返回 `400` 和结构化 `details`。
 
-碰撞可变网格超过工具内存保护阈值时，失败信息会包含建议的最小 `voxelSize`，但服务绝不自动应用。操作员应先 `PATCH /api/datasets/:id` 明确提交确认后的体素尺寸，再调用 retry；工作目录中通过完整性校验的 AHoLo 视觉中间产物可以复用。体素尺寸变大意味着碰撞分辨率降低，重试成功不替代细障碍和航迹净空验收。
+碰撞可变网格超过工具内存保护阈值时，失败信息会包含建议的最小 `voxelSize`，但服务绝不自动应用。操作员应先 `PATCH /api/datasets/:id` 明确提交确认后的体素尺寸，再调用 retry。体素尺寸变大意味着碰撞分辨率降低，重试成功不替代细障碍和航迹净空验收。
 
-数据集响应中的 `aholoVisualRevision` / `aholoPolicyVersion` 代表当前 AHoLo 视觉版本；没有 Renderer 选择字段。名称或 WGS84 placement 更新只改变业务元数据，不产生新的视觉 revision。版本化内容 URI 缓存一年，活动 manifest 不缓存；切换接口会重新核对源文件、碰撞摘要和产物完整性。
+数据集响应中的 `visualBackend="playcanvas-sog"`、`activeVisualRevision` 和 `visualPolicyVersion` 代表当前生产视觉。名称或 WGS84 placement 更新只改变业务元数据，不产生新的视觉 revision。切换接口会重新核对源文件、碰撞摘要和产物完整性。
 
-AHoLo 的 `minLevel`、`maxBudget`、`backgroundPenalty`、`distanceStep` 和调度选项属于浏览器会话级 Renderer 参数，通过 AHoLo 公共 `LodSplat.setConfig()` 生效；服务端不提供持久化接口，也不会用这些参数改变 Chunk 产物、碰撞、标签或航迹。
+`render-manifest.playcanvas` 只返回版本化 `lodMetaUrl`、报告 URL、官方策略版本、层级统计和坐标变换。API 不公开 Gaussian 预算、LOD 距离、最小/最大层级、Chunk 或编码参数；前端也不写这些引擎值。实际 WebGPU/WebGL2 与排序方式只是只读诊断。
 
 `DELETE /api/datasets/:id` 是永久删除：服务会先取消该数据集正在执行的切片/碰撞任务，再删除上传临时文件、原始 PLY、工作目录和已发布资源。数据库外键会级联删除标签、任务及航迹点。
 
@@ -83,4 +85,6 @@ AHoLo 的 `minLevel`、`maxBudget`、`backgroundPenalty`、`distanceStep` 和调
 
 `DELETE /api/missions/:id` 只永久删除指定任务及其航迹点，不删除关联的数据集和巡检标签。前端每条任务都有独立“删除航线任务”入口并要求二次确认。
 
-AHoLo 中有效任务的 inspection 点以红色显示，内部命名为 `hj_<标签名>` 但不绘制该文字；A*/细分生成的 transit 点以蓝色显示，Home 为中性色，已校验折线为绿色。巡检对象标签本身可点击，选中时高亮并显示持久化位置、法向和解析状态。最终复检失败产生的严格安全前缀使用橙色折线并标为“部分预览”，不绘制失败点、失败航段或任何猜测后缀；只有完整 `valid` 航线可以导出。
+PlayCanvas 中有效任务的 inspection 点以红色显示，内部命名为 `hj_<标签名>` 但不绘制该文字；A*/细分生成的 transit 点以蓝色显示，Home 为中性色，已校验折线为绿色。巡检对象标签本身可点击，选中时高亮并显示持久化位置、法向和解析状态。最终复检失败产生的严格安全前缀使用橙色折线并标为“部分预览”，不绘制失败点、失败航段或任何猜测后缀；只有完整 `valid` 航线可以导出。
+
+当前 API、数据库和产物中没有 semantic 字段、Sidecar、上传端点、语义查询或高亮能力。相关内容仅记录在长期路线文档中。

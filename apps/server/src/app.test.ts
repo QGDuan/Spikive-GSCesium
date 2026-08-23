@@ -16,6 +16,27 @@ const datasetInput = (name: string) => ({
 });
 
 describe("scene-bound label and mission API", () => {
+  it("reports coarse runtime telemetry without exposing machine identity", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "spikive-app-telemetry-")); directories.push(directory);
+    Object.assign(config, {
+      dataDir: directory, dbPath: path.join(directory, "platform.sqlite"), uploadsDir: path.join(directory, "uploads"),
+      sourcesDir: path.join(directory, "sources"), workDir: path.join(directory, "work"), publishedDir: path.join(directory, "published"),
+      conversionEnabled: false
+    });
+    const { app } = await buildApp();
+    try {
+      const response = await app.inject({ method: "GET", url: "/api/runtime-telemetry" });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toMatchObject({
+        host: { logicalCores: expect.any(Number), memoryUsedBytes: expect.any(Number), memoryTotalBytes: expect.any(Number) },
+        process: { rssBytes: expect.any(Number), heapUsedBytes: expect.any(Number), heapTotalBytes: expect.any(Number) }
+      });
+      expect(response.body).not.toContain("hostname");
+      expect(response.body).not.toContain("pid");
+    } finally { await app.close(); }
+  });
+
   it("returns 400 for invalid request contracts instead of reporting a server error", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "spikive-app-validation-")); directories.push(directory);
     Object.assign(config, {
@@ -94,7 +115,7 @@ describe("scene-bound label and mission API", () => {
     } finally { await app.close(); }
   });
 
-  it("queues an AHoLo visual rebuild while keeping published collision serviceable", async () => {
+  it("queues a PlayCanvas visual rebuild while keeping published collision serviceable", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "spikive-app-rebuild-")); directories.push(directory);
     Object.assign(config, {
       dataDir: directory, dbPath: path.join(directory, "platform.sqlite"), uploadsDir: path.join(directory, "uploads"),
@@ -118,6 +139,68 @@ describe("scene-bound label and mission API", () => {
       const collision = await app.inject({ method: "GET", url: `/api/datasets/${dataset.id}/collision/scene.voxel.bin` });
       expect(collision.statusCode).toBe(200);
       expect((await app.inject({ method: "POST", url: `/api/datasets/${dataset.id}/rebuild-tiles` })).statusCode).toBe(404);
+    } finally { await app.close(); }
+  });
+
+  it("serves a no-store PlayCanvas manifest and immutable nested SOG resources", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "spikive-app-playcanvas-manifest-")); directories.push(directory);
+    Object.assign(config, {
+      dataDir: directory, dbPath: path.join(directory, "platform.sqlite"), uploadsDir: path.join(directory, "uploads"),
+      sourcesDir: path.join(directory, "sources"), workDir: path.join(directory, "work"), publishedDir: path.join(directory, "published"),
+      conversionEnabled: false
+    });
+    const { app, db } = await buildApp();
+    try {
+      const dataset = (await app.inject({ method: "POST", url: "/api/datasets", payload: datasetInput("manifest") })).json();
+      const revision = "11111111-1111-4111-8111-111111111111";
+      const datasetRoot = path.join(directory, "published", dataset.id);
+      const revisionRoot = path.join(datasetRoot, "visual-revisions", revision);
+      mkdirSync(path.join(revisionRoot, "sog", "0_0"), { recursive: true });
+      writeFileSync(path.join(revisionRoot, "sog", "lod-meta.json"), "{}");
+      writeFileSync(path.join(revisionRoot, "sog", "0_0", "meta.json"), "{\"version\":2}");
+      writeFileSync(path.join(revisionRoot, "visual-report.json"), JSON.stringify({
+        schemaVersion: 2, datasetId: dataset.id, visualBackend: "playcanvas-sog", visualRevision: revision,
+        policyVersion: "playcanvas-upstream-streamed-sog-v1",
+        source: { sha256: "source", bytes: 100, splatCount: 16, shDegree: 0, coordinateSystem: "tile_local_z_up" },
+        transform: { localToRender: "render=(x,z,-y)", renderToLocal: "local=(x,-z,y)" },
+        artifact: { bytes: 10, sha256: "artifact", chunkCount: 1, lodMetaSha256: "meta" },
+        collisionRevision: "collision", tool: { name: "@playcanvas/splat-transform", version: "3.3.0" },
+        policy: { lodChunkCount: 512, lodChunkExtent: 16, fineLodFormat: "sog", coarseLodFormat: "sog", ratios: [1, 0.5, 0.25, 0.1] },
+        levels: [1, 0.5, 0.25, 0.1].map((ratio, level) => ({ level, ratio, splatCount: Math.max(1, Math.round(16 * ratio)), chunkCount: 1, bytes: 2 })),
+        builtAt: "2026-08-23T00:00:00.000Z"
+      }));
+      writeFileSync(path.join(datasetRoot, "visual-artifact-manifest.json"), JSON.stringify({
+        schemaVersion: 2, datasetId: dataset.id, activeRevision: revision, previousRevision: null,
+        revisions: [{
+          revision, backend: "playcanvas-sog", policyVersion: "playcanvas-upstream-streamed-sog-v1",
+          sourceSha256: "source", collisionRevision: "collision",
+          relativeRootPath: `visual-revisions/${revision}`,
+          reportPath: `visual-revisions/${revision}/visual-report.json`,
+          createdAt: "2026-08-23T00:00:00.000Z", retainUntil: null
+        }],
+        updatedAt: "2026-08-23T00:00:00.000Z"
+      }));
+      db.updateDataset(dataset.id, {
+        status: "ready", collisionStatus: "ready", progress: 100,
+        visualBackend: "playcanvas-sog", activeVisualRevision: revision,
+        visualPolicyVersion: "playcanvas-upstream-streamed-sog-v1"
+      });
+
+      const manifest = await app.inject({ method: "GET", url: `/api/datasets/${dataset.id}/render-manifest` });
+      expect(manifest.statusCode).toBe(200);
+      expect(manifest.headers["cache-control"]).toBe("no-store");
+      expect(manifest.json()).toMatchObject({
+        renderer: "playcanvas", visualBackend: "playcanvas-sog", activeVisualRevision: revision,
+        collisionRevision: "collision", playcanvas: { policyVersion: "playcanvas-upstream-streamed-sog-v1" }
+      });
+
+      const meta = await app.inject({ method: "GET", url: `/api/datasets/${dataset.id}/visual-revisions/${revision}/sog/lod-meta.json` });
+      expect(meta.statusCode).toBe(200);
+      expect(meta.headers["cache-control"]).toBe("no-store");
+      const chunk = await app.inject({ method: "GET", url: `/api/datasets/${dataset.id}/visual-revisions/${revision}/sog/0_0/meta.json` });
+      expect(chunk.statusCode).toBe(200);
+      expect(chunk.headers["cache-control"]).toContain("immutable");
+      expect(chunk.headers["content-type"]).toContain("application/json");
     } finally { await app.close(); }
   });
 });
