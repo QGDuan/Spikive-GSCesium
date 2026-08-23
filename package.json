@@ -4,16 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "node server.mjs",
+    "start": "node server.mjs --production",
     "build:lod": "node scripts/build-streamed-sog.mjs",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "test": "node --test scripts/*.test.mjs server/*.test.mjs"
   },
   "dependencies": {
+    "@playcanvas/splat-transform": "3.3.0",
     "playcanvas": "2.21.4"
   },
   "devDependencies": {
-    "@playcanvas/splat-transform": "3.3.0",
     "typescript": "7.0.2",
     "vite": "8.2.2"
   },

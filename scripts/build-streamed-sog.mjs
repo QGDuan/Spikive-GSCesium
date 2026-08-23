@@ -1,26 +1,16 @@
-import { access, mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
+import { access, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildOfficialSog, createLodRatios, validateSogArtifact } from './sog-build-lib.mjs';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const source = resolve(projectRoot, 'public/data/point_cloud.ply');
 const output = resolve(projectRoot, 'public/data/point_cloud-lod/lod-meta.json');
 const outputDirectory = dirname(output);
 const workRoot = resolve(projectRoot, 'var/lod-build');
-const lodLevels = [
-  { lod: 1, ratio: '90%' },
-  { lod: 2, ratio: '75%' },
-  { lod: 3, ratio: '60%' },
-  { lod: 4, ratio: '40%' },
-  { lod: 5, ratio: '20%' },
-  { lod: 6, ratio: '10%' }
-];
-const executable = resolve(
-  projectRoot,
-  'node_modules/.bin',
-  process.platform === 'win32' ? 'splat-transform.cmd' : 'splat-transform'
-);
+const levelArgumentIndex = process.argv.indexOf('--levels');
+const levelCount = levelArgumentIndex >= 0 ? Number(process.argv[levelArgumentIndex + 1]) : 5;
+const ratios = createLodRatios(levelCount);
 
 await access(source);
 
@@ -35,44 +25,25 @@ try {
 
 await mkdir(workRoot, { recursive: true });
 const workDirectory = await mkdtemp(join(workRoot, 'official-'));
-const lodSources = lodLevels.map(({ lod, ratio }) => ({
-  lod,
-  ratio,
-  path: join(workDirectory, `lod${lod}.ply`)
-}));
-
-const run = (args) =>
-  new Promise((resolveRun, rejectRun) => {
-    const child = spawn(executable, args, {
-      cwd: projectRoot,
-      shell: false,
-      stdio: 'inherit'
-    });
-
-    child.once('error', rejectRun);
-    child.once('exit', (code, signal) => {
-      if (code === 0) {
-        resolveRun();
-        return;
-      }
-      rejectRun(new Error(`splat-transform 失败：code=${code ?? 'null'}, signal=${signal ?? 'null'}`));
-    });
-  });
+const stagedOutputDirectory = resolve(workDirectory, 'sog');
+const stagedOutput = resolve(stagedOutputDirectory, 'lod-meta.json');
 
 let completed = false;
 
 try {
-  for (const level of lodSources) {
-    await run([source, '--decimate', level.ratio, level.path]);
-  }
-  await mkdir(outputDirectory, { recursive: false });
-  const tagArguments = [source, '--tag-lod', '0'];
-  for (const level of lodSources) {
-    tagArguments.push(level.path, '--tag-lod', String(level.lod));
-  }
-  tagArguments.push(output);
-  await run(tagArguments);
+  await mkdir(stagedOutputDirectory, { recursive: false });
+  await buildOfficialSog({
+    source,
+    output: stagedOutput,
+    workDirectory: resolve(workDirectory, 'levels'),
+    levelCount,
+    onProgress: ({ stage }) => console.log(stage),
+    onLog: (line) => console.log(line)
+  });
+  await validateSogArtifact(stagedOutputDirectory, levelCount);
+  await rename(stagedOutputDirectory, outputDirectory);
   completed = true;
+  console.log(`已生成 ${levelCount} 层：${ratios.join('% / ')}%`);
 } finally {
   if (completed) {
     await rm(workDirectory, { recursive: true, force: true });
