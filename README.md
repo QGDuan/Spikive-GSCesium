@@ -6,9 +6,11 @@
 
 详细原理文档：
 
+- 巡检点与法向获取的独立实现说明、成熟能力复用及鲁棒性边界：[`docs/INSPECTION_POINT_NORMAL_IMPLEMENTATION.md`](docs/INSPECTION_POINT_NORMAL_IMPLEMENTATION.md)；
 - 巡检点圆选、PCA 法向、空间标签与观察方向：[`docs/LABEL_SELECTION_NORMAL.md`](docs/LABEL_SELECTION_NORMAL.md)；
 - SVO 体素真值、GLB 调试网格和高斯/体素勾选开关：[`docs/VOXEL_COLLISION_DEBUG.md`](docs/VOXEL_COLLISION_DEBUG.md)；
 - React 标签管理、SQLite CRUD 与业务边界：[`docs/LABEL_MANAGEMENT.md`](docs/LABEL_MANAGEMENT.md)；
+- 起点唯一约束、标签后端鲁棒性与历史图片扩展：[`docs/LABEL_HISTORY_MEDIA_DESIGN.md`](docs/LABEL_HISTORY_MEDIA_DESIGN.md)；
 - React UI 设计系统、容器原语与后续开发规范：[`docs/UI_SYSTEM.md`](docs/UI_SYSTEM.md)。
 
 ## 1. 前置条件及环境配置
@@ -122,7 +124,7 @@ LOD0 直接使用完整源 PLY，不执行抽稀。其余层串行调用官方 `
 
 场景卡片只管理数据与构建状态，不再内嵌标签下拉列表。顶部“标签”是独立 React 页签，按当前已加载场景及其切片版本管理标签的初始化、编辑、删除、列表和类型查询。标签页不能切换所属场景；必须先在“场景”页查看目标场景。React 只负责业务管理界面；PlayCanvas 继续作为唯一三维 Renderer、Canvas 和 GPU 上下文。
 
-标签类型固定为：缺陷点、常态化巡检点、关键巡检点、一般巡检点。标签被任务/航线引用时不能删除；必须先删除引用。详细数据与 API 契约见 [`docs/LABEL_MANAGEMENT.md`](docs/LABEL_MANAGEMENT.md)。
+标签类型固定为：起点、缺陷点、常态化巡检点、关键巡检点、一般巡检点。每个场景可以没有起点，但最多只能有一个。标签被任务/航线引用时不能删除；必须先删除引用。详细数据与 API 契约见 [`docs/LABEL_MANAGEMENT.md`](docs/LABEL_MANAGEMENT.md)。
 
 ### 添加巡检点
 
@@ -130,16 +132,16 @@ LOD0 直接使用完整源 PLY，不执行抽稀。其余层串行调用官方 `
 2. 先在“场景”页查看目标场景，再打开“标签”页，点击“在当前场景新建标签”；
 3. 移动鼠标会显示固定直径 10px 的圆形光标，即固定半径 5px；
 4. 单击 GS 后，PlayCanvas Picker 先确认中心像素属于当前 GS 场景；
-5. 同一个 PlayCanvas `GraphicsDevice` 执行一次 SuperSplat centers 风格的离屏 GPU 掩码，并按当前 active placement interval 快照过滤，只保留真正正在显示的 Streamed SOG LOD Gaussian 中心；
-6. 离点击中心投影最近的 Gaussian 中心成为巡检点位置，5px 圆内全部已选中心通过 PCA 拟合表面法向；
-7. 圆选后在标签页填写名称、说明并选择四种类型之一，确认后才写入 SQLite；
+5. PlayCanvas 原生 `Picker(depth=true)` 在同一个 `GraphicsDevice` 上执行官方 GS 拾取 Pass；Gaussian 屏幕覆盖、Alpha 阈值和深度共同决定每个像素最前方的可见结果，前墙会挡住后墙；
+6. 中心像素的官方深度结果成为巡检点位置，5px 圆内固定 21 个像素模板读取前表面深度，并通过 PCA 拟合局部整体法向；
+7. 圆选后在标签页填写名称、说明并选择五种类型之一，确认后才写入 SQLite；起点为场景内可选唯一类型；
 8. 保存后场景创建小型红色 PlayCanvas Sphere Mesh，并从球心沿持久化单位法向绘制一条 1 m 橙色方向线；世界空间 Text Element 的锚点位于法向线末端外侧 0.12 m，并始终朝向相机。点击球体或法向线会选中该标签并打开标签页详情。
 
-该交互不是可拖动的画笔，而是一次单击触发的固定 5px 圆形多选，界面不提供半径调参。该流程不读取原始 PLY、不创建第二份源点索引，也不使用体素来决定标签位置或法向量；体素 SVO 只服务后续避障和航线安全计算。标签记录源摘要、活动视觉 revision、实际驻留 LOD、参与拟合的 Gaussian 数量和 PCA 统计。切换视觉 revision 后，旧标签会显示为过期，必须在新视觉版本上重新选择。
+该交互不是可拖动的画笔，而是一次单击触发的固定 5px 前表面采样，界面不提供半径调参。该流程不读取原始 PLY、不枚举私有 LOD、不创建第二份源点索引，也不使用体素决定标签位置或法向量；体素 SVO 只服务后续避障和航线安全计算。标签记录源摘要、活动视觉 revision、前表面采样数量和 PCA 统计。切换视觉 revision 后，旧标签会显示为过期，必须在新视觉版本上重新选择。
 
 巡检点 Mesh、法向线与文字使用正常深度关系，不使用始终置顶的 HTML/Sprite 标记，所以被建筑遮挡时不会穿墙显示。文字位置沿法向移到模型表面外侧，文字平面继续朝向相机以保持可读性。法向线完全由标签保存的局部 Z-up 单位法向生成，只用于表达表面朝向；观察点可优先沿法向外侧搜索，观察方向应朝回标签，并仍需通过 SVO 膨胀碰撞与视线复检。场景切换时会先停止新的拾取；正在进行的 GPU 读回完成前不会销毁选择纹理，随后再释放旧 LOD 缓存、Mesh、法向线、Text Element 与拾取映射。
 
-GPU 圆形多选对每个当前驻留 Gaussian 产生一个布尔选择结果，以 RGBA8 每像素打包 4 个结果并异步读回。第一次选择某个 Chunk 时会为其中心创建临时 RGBA32F GPU 纹理；Chunk 离开当前 LOD 后释放，场景清除时全部释放。选中的中心集合只用于计算位置和 PCA 法向，不再创建额外的 Gaussian 调试高亮。选择 Pass 不修改 PlayCanvas 官方 GS 渲染 Shader、LOD 加载器或 SOG 数据。
+可见性和 Alpha 计算完全复用 PlayCanvas 官方 GPU Picker，项目不再维护中心纹理、RGBA 选择掩码、WGSL/GLSL 选择 Shader 或 active-placement 私有适配。CPU 只对最多 21 个前表面点计算 3×3 PCA，不修改 PlayCanvas 官方 GS 渲染 Shader、Alpha 参数、LOD 加载器或 SOG 数据。
 
 ### 查看与性能监控
 

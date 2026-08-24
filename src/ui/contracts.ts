@@ -1,6 +1,6 @@
 export type WorkspaceTab = 'scenes' | 'labels';
-export type LabelType = '缺陷点' | '常态化巡检点' | '关键巡检点' | '一般巡检点';
-export const LABEL_TYPES: LabelType[] = ['缺陷点', '常态化巡检点', '关键巡检点', '一般巡检点'];
+export type LabelType = '起点' | '缺陷点' | '常态化巡检点' | '关键巡检点' | '一般巡检点';
+export const LABEL_TYPES: LabelType[] = ['起点', '缺陷点', '常态化巡检点', '关键巡检点', '一般巡检点'];
 
 export interface CollisionState {
   status: 'not-built' | 'building' | 'ready' | 'failed' | 'unavailable';
@@ -98,6 +98,7 @@ export interface AppShellProps {
   status: { message: string; state: 'loading' | 'ready' | 'error' };
   labels: InspectionLabel[];
   labelTotal: number;
+  startLabelId?: string | null;
   selectedLabel?: InspectionLabel;
   labelFilterType?: LabelType;
   labelFilterQuery: string;

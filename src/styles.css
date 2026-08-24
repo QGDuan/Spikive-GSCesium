@@ -149,6 +149,7 @@ progress::-webkit-progress-value, progress::-moz-progress-bar { background: var(
 .label-type-dot--1 { opacity: .55; }
 .label-type-dot--2 { box-shadow: 0 0 0 2px var(--ui-color-accent-tint); }
 .label-type-dot--3 { border-color: var(--ui-color-text-muted); }
+.label-type-dot--4 { opacity: .35; }
 
 .inspection-card { position: fixed; z-index: var(--ui-layer-inspection); top: calc(var(--ui-topbar-height) + var(--ui-space-5)); right: var(--ui-space-6); width: var(--ui-inspection-width); max-height: calc(100vh - 206px); overflow: auto; scrollbar-color: var(--ui-color-border-hover) transparent; scrollbar-width: thin; }
 .label-editor, .label-detail { display: grid; gap: var(--ui-space-4); padding: var(--ui-space-4); }
@@ -160,9 +161,11 @@ progress::-webkit-progress-value, progress::-moz-progress-bar { background: var(
 .type-select legend { position: absolute; color: var(--ui-color-text-muted); font-size: var(--ui-font-size-helper); }
 .type-select button { display: flex; min-height: var(--ui-control-height); align-items: center; gap: var(--ui-space-2); padding: 0 var(--ui-space-3); border: 1px solid var(--ui-color-border); border-radius: var(--ui-radius-control); background: var(--ui-color-card-hover); color: var(--ui-color-text-muted); cursor: pointer; font-size: var(--ui-font-size-helper); text-align: left; }
 .type-select button i { width: 7px; height: 7px; border: 1px solid var(--ui-color-text-muted); border-radius: var(--ui-radius-round); }
-.type-select button:hover { border-color: var(--ui-color-border-hover); color: var(--ui-color-text-secondary); }
+.type-select button:not(:disabled):hover { border-color: var(--ui-color-border-hover); color: var(--ui-color-text-secondary); }
 .type-select button.is-active { border-color: var(--ui-color-accent); color: var(--ui-color-text); }
 .type-select button.is-active i { border-color: var(--ui-color-accent); background: var(--ui-color-accent); }
+.type-select button:disabled { cursor: not-allowed; opacity: .4; }
+.field-help { color: var(--ui-color-text-muted); font-size: var(--ui-font-size-caption); line-height: var(--ui-line-body); }
 .editor-actions { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--ui-space-1); }
 .label-detail__head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--ui-space-3); }
 .label-detail__head > div:first-child > span { color: var(--ui-color-accent); font-size: var(--ui-font-size-caption); }

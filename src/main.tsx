@@ -1,6 +1,10 @@
 import './styles.css';
 import { createRoot } from 'react-dom/client';
-import { FIXED_CIRCLE_RADIUS_PIXELS, type GaussianCircleSelection } from './gaussian-circle-selector';
+import {
+  FIXED_CIRCLE_RADIUS_PIXELS,
+  GAUSSIAN_SURFACE_SELECTION_METHOD,
+  type GaussianSurfaceSelection
+} from './gaussian-surface-selector';
 import { startMonitor } from './monitor';
 import {
   AppShell,
@@ -17,6 +21,7 @@ import { GsViewer } from './viewer';
 interface LabelSnapshot {
   sourceSha256: string | null;
   visualRevision: string | null;
+  startLabelId?: string | null;
   selectionDefaults?: { selectionRadiusPixels: number };
   labelTypes?: LabelType[];
   total?: number;
@@ -53,7 +58,7 @@ let labelFilterType: LabelType | undefined;
 let labelFilterQuery = '';
 let labelPanelLabels: InspectionLabel[] = [];
 let labelPanelTotal = 0;
-let pendingLabelSelection: GaussianCircleSelection | undefined;
+let pendingLabelSelection: GaussianSurfaceSelection | undefined;
 let displayedLabelSignature = '';
 let activeTask: AppShellProps['activeTask'] = null;
 let workerCount = 0;
@@ -94,7 +99,8 @@ const visibleLabels = (dataset: Dataset) => {
   const snapshot = labelsByDataset.get(dataset.id);
   if (!snapshot) return [];
   return snapshot.labels.filter(
-    (label) => label.resolved && label.selectionMethod === 'loaded-lod-gpu-circle-pca-v1' &&
+    (label) => label.resolved &&
+      [GAUSSIAN_SURFACE_SELECTION_METHOD, 'loaded-lod-gpu-circle-pca-v1'].includes(label.selectionMethod ?? '') &&
       label.visualRevision === snapshot.visualRevision
   );
 };
@@ -124,6 +130,7 @@ const renderUi = () => {
     status={statusState}
     labels={labelPanelLabels}
     labelTotal={labelPanelTotal}
+    startLabelId={selectedDataset ? labelsByDataset.get(selectedDataset.id)?.startLabelId : undefined}
     selectedLabel={selectedLabel}
     labelFilterType={labelFilterType}
     labelFilterQuery={labelFilterQuery}
@@ -453,7 +460,7 @@ const startLabelPick = async () => {
   canvas.classList.add('is-picking');
   setSelectionCircleVisible(true);
   renderUi();
-  setStatus(`单击 GS 表面：使用当前驻留 LOD 的 ${FIXED_CIRCLE_RADIUS_PIXELS}px GPU 圆选中心计算法向。`);
+  setStatus(`单击 GS 表面：使用 PlayCanvas ${FIXED_CIRCLE_RADIUS_PIXELS}px 深度 Picker 读取 Alpha 可见前表面。`);
 };
 
 const createInspectionLabel = async (metadata: LabelMetadata) => {
@@ -472,7 +479,7 @@ const createInspectionLabel = async (metadata: LabelMetadata) => {
   viewer.setSelectedInspectionPoint(label.id);
   await refreshDatasets();
   await refreshLabelPanel();
-  setStatus(`${label.title} 已建立 · ${label.type} · ${label.neighborCount ?? 0} 个 GS`, 'ready');
+  setStatus(`${label.title} 已建立 · ${label.type} · ${label.neighborCount ?? 0} 个前表面采样点`, 'ready');
 };
 
 const updateInspectionLabel = async (labelId: string, metadata: LabelMetadata) => {
@@ -518,13 +525,13 @@ const onPointerUp = async (event: PointerEvent) => {
   if (!dataset) return;
   pickInFlight = true;
   renderUi();
-  setStatus(`正在用固定 ${FIXED_CIRCLE_RADIUS_PIXELS}px GPU 圆形区域选择当前 LOD…`);
+  setStatus(`正在用固定 ${FIXED_CIRCLE_RADIUS_PIXELS}px 区域读取 Alpha 可见前表面…`);
   try {
-    const selection = await viewer.pickGaussianCircle(event.clientX, event.clientY);
+    const selection = await viewer.pickGaussianSurface(event.clientX, event.clientY);
     if (!selection) throw new Error('点击位置没有可选的 Gaussian，请贴近目标后重新选择。');
     pendingLabelSelection = selection;
     cancelLabelPick();
-    setStatus(`已选择 ${selection.neighborCount.toLocaleString('zh-CN')} 个当前 LOD Gaussian 中心，请在标签页完成初始化。`, 'ready');
+    setStatus(`已取得 ${selection.neighborCount.toLocaleString('zh-CN')} 个 GPU 前表面深度采样，请在标签页完成初始化。`, 'ready');
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), 'error');
   } finally {

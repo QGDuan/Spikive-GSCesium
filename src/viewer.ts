@@ -19,7 +19,6 @@ import {
   GSplatHandler,
   GraphicsDevice,
   LightComponentSystem,
-  Mat4,
   Picker,
   Quat,
   RESOLUTION_AUTO,
@@ -36,9 +35,10 @@ import {
 } from 'playcanvas';
 import { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
 import {
-  GaussianCircleSelector,
-  type GaussianCircleSelection
-} from './gaussian-circle-selector';
+  SURFACE_DEPTH_SAMPLE_OFFSETS,
+  createGaussianSurfaceSelection,
+  type GaussianSurfaceSelection
+} from './gaussian-surface-selector';
 
 export interface RendererMetrics {
   backend: 'WebGPU' | 'WebGL2' | string;
@@ -123,7 +123,6 @@ export class GsViewer {
   private camera?: Entity;
   private controls?: { reset: (focus: Vec3, position: Vec3) => void };
   private picker?: Picker;
-  private circleSelector?: GaussianCircleSelector;
   private inspectionFont?: CanvasFont;
   private inspectionMaterial?: StandardMaterial;
   private inspectionSelectedMaterial?: StandardMaterial;
@@ -136,16 +135,9 @@ export class GsViewer {
   private voxelDebugGeneration = 0;
   private disposed = false;
   private pickerBusy = false;
-  private circleTrimFrame = 0;
   private readonly inspectionMeshIds = new Map<object, string>();
   private readonly resize = () => this.app?.resizeCanvas();
   private readonly updateInspectionLabels = () => {
-    this.circleTrimFrame += 1;
-    if (this.circleTrimFrame >= 60) {
-      this.circleTrimFrame = 0;
-      const component = this.current?.entity.gsplat;
-      if (component) this.circleSelector?.trimResidentResources(component);
-    }
     const camera = this.camera;
     const markers = this.current?.markers;
     if (!camera || !markers?.length) return;
@@ -195,7 +187,6 @@ export class GsViewer {
     this.app.scene.gsplat.enableIds = true;
 
     this.picker = new Picker(this.app, 1, 1, true);
-    this.circleSelector = new GaussianCircleSelector(device);
     this.inspectionFont = new CanvasFont(this.app, {
       fontName: 'Arial, "PingFang SC", "Microsoft YaHei", sans-serif',
       fontWeight: 'bold',
@@ -307,7 +298,6 @@ export class GsViewer {
       this.controls?.reset(new Vec3(0, 0, 0), position);
 
       const previous = this.current;
-      this.circleSelector?.clearResidentResources();
       this.current = {
         root,
         entity,
@@ -621,17 +611,16 @@ export class GsViewer {
     }
   }
 
-  async pickGaussianCircle(
+  async pickGaussianSurface(
     clientX: number,
     clientY: number
-  ): Promise<GaussianCircleSelection | null> {
+  ): Promise<GaussianSurfaceSelection | null> {
     const app = this.app;
     const cameraEntity = this.camera;
     const camera = cameraEntity?.camera;
     const picker = this.picker;
-    const circleSelector = this.circleSelector;
     const current = this.current;
-    if (!app || !cameraEntity || !camera || !picker || !circleSelector || !current ||
+    if (!app || !cameraEntity || !camera || !picker || !current || this.activeLoads > 0 ||
         !current.entity.enabled || this.pickerBusy) return null;
     const rect = this.canvas.getBoundingClientRect();
     const x = clientX - rect.left;
@@ -641,8 +630,18 @@ export class GsViewer {
     const generation = this.generation;
     this.pickerBusy = true;
     try {
-      picker.resize(Math.max(1, Math.round(rect.width)), Math.max(1, Math.round(rect.height)));
-      for (const marker of current.markers) {
+      const width = Math.max(1, Math.round(rect.width));
+      const height = Math.max(1, Math.round(rect.height));
+      const pickX = Math.floor(x) + 0.5;
+      const pickY = Math.floor(y) + 0.5;
+      picker.resize(width, height);
+      const markerStates = current.markers.map((marker) => ({
+        marker,
+        mesh: marker.mesh.enabled,
+        normalLine: marker.normalLine?.enabled,
+        textScreen: marker.textScreen.enabled
+      }));
+      for (const { marker } of markerStates) {
         marker.mesh.enabled = false;
         if (marker.normalLine) marker.normalLine.enabled = false;
         marker.textScreen.enabled = false;
@@ -650,31 +649,40 @@ export class GsViewer {
       try {
         picker.prepare(camera, app.scene);
       } finally {
-        for (const marker of current.markers) {
-          marker.mesh.enabled = true;
-          if (marker.normalLine) marker.normalLine.enabled = true;
-          marker.textScreen.enabled = true;
+        for (const state of markerStates) {
+          state.marker.mesh.enabled = state.mesh;
+          if (state.marker.normalLine) state.marker.normalLine.enabled = state.normalLine ?? false;
+          state.marker.textScreen.enabled = state.textScreen;
         }
       }
-      const selection = await picker.getSelectionAsync(x, y, 1, 1);
+      const [selection, centerWorld] = await Promise.all([
+        picker.getSelectionAsync(pickX, pickY, 1, 1),
+        picker.getWorldPointAsync(pickX, pickY)
+      ]);
       if (this.disposed || generation !== this.generation ||
-          !selection.some((selected) => selected === current.entity.gsplat)) return null;
+          !centerWorld || !selection.some((selected) => selected === current.entity.gsplat)) return null;
+
       const inverse = current.root.getWorldTransform().clone().invert();
       const localCamera = inverse.transformPoint(cameraEntity.getPosition(), new Vec3());
-      const modelViewProjection = new Mat4();
-      modelViewProjection.mul2(camera.projectionMatrix, camera.viewMatrix);
-      modelViewProjection.mul(current.root.getWorldTransform());
-      const selectionResult = await circleSelector.selectCircle(
-        current.entity.gsplat!,
-        modelViewProjection,
-        { x: localCamera.x, y: localCamera.y, z: localCamera.z },
-        x,
-        y,
-        rect.width,
-        rect.height
+      const offsets = SURFACE_DEPTH_SAMPLE_OFFSETS.filter(({ x: offsetX, y: offsetY }) =>
+        pickX + offsetX >= 0 && pickX + offsetX < width &&
+        pickY + offsetY >= 0 && pickY + offsetY < height
+      );
+      const worldSamples = await Promise.all(offsets
+        .filter(({ x: offsetX, y: offsetY }) => offsetX !== 0 || offsetY !== 0)
+        .map(({ x: offsetX, y: offsetY }) => picker.getWorldPointAsync(pickX + offsetX, pickY + offsetY))
       );
       if (this.disposed || generation !== this.generation) return null;
-      return selectionResult;
+      const centerLocal = inverse.transformPoint(centerWorld, new Vec3());
+      const localSamples = [centerWorld, ...worldSamples]
+        .filter((point): point is Vec3 => point !== null)
+        .map((point) => inverse.transformPoint(point, new Vec3()))
+        .map((point) => ({ x: point.x, y: point.y, z: point.z }));
+      return createGaussianSurfaceSelection(
+        { x: centerLocal.x, y: centerLocal.y, z: centerLocal.z },
+        localSamples,
+        { x: localCamera.x, y: localCamera.y, z: localCamera.z }
+      );
     } finally {
       this.finishPick();
     }
@@ -688,7 +696,6 @@ export class GsViewer {
     }
     this.clearVoxelDebugForScene(this.current);
     this.clearInspectionMarkers(this.current);
-    this.circleSelector?.clearResidentResources();
     this.current.root.destroy();
     this.current.asset.unload();
     this.app.assets.remove(this.current.asset);
@@ -706,7 +713,6 @@ export class GsViewer {
     if (this.current && this.app) {
       this.clearVoxelDebugForScene(this.current);
       this.clearInspectionMarkers(this.current);
-      this.circleSelector?.clearResidentResources();
       this.current.root.destroy();
       this.current.asset.unload();
       this.app.assets.remove(this.current.asset);
@@ -726,8 +732,6 @@ export class GsViewer {
     this.app?.off('update', this.updateInspectionLabels);
     this.picker?.destroy();
     this.picker = undefined;
-    this.circleSelector?.destroy();
-    this.circleSelector = undefined;
     this.inspectionFont?.destroy();
     this.inspectionFont = undefined;
     this.inspectionMaterial?.destroy();

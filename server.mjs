@@ -41,6 +41,9 @@ const distRoot = resolve(projectRoot, 'dist');
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const REVISION_PATTERN = /^[0-9A-Za-z_-]+$/;
 const FIXED_SELECTION_RADIUS_PIXELS = 5;
+const SURFACE_SELECTION_METHOD = 'playcanvas-picker-depth-pca-v2';
+const SURFACE_PICK_BACKEND = 'playcanvas-native-depth-picker';
+const SURFACE_SELECTION_DATA_SOURCE = 'rendered-alpha-front-surface';
 
 let activeBuildId;
 let activeCollisionId;
@@ -723,10 +726,12 @@ const handleApi = async (request, response, url) => {
     const limit = Number(url.searchParams.get('limit') || 200);
     const offset = Number(url.searchParams.get('offset') || 0);
     const result = labelStore.list(dataset.id, { type, query, limit, offset });
+    const startLabel = labelStore.getStart(dataset.id);
     sendJson(response, 200, {
       datasetId: dataset.id,
       sourceSha256: dataset.source?.sha256 ?? null,
       visualRevision: dataset.activeVisualRevision ?? null,
+      startLabelId: startLabel?.id ?? null,
       selectionDefaults: { selectionRadiusPixels: FIXED_SELECTION_RADIUS_PIXELS },
       labelTypes: LABEL_TYPES,
       ...result
@@ -769,26 +774,18 @@ const handleApi = async (request, response, url) => {
     }
     const body = await readJsonBody(request);
     if (body.visualRevision !== dataset.activeVisualRevision) {
-      throw Object.assign(new Error('圆形多选结果不属于当前视觉版本，请重新选择。'), { statusCode: 409 });
+      throw Object.assign(new Error('前表面选择结果不属于当前视觉版本，请重新选择。'), { statusCode: 409 });
     }
-    const position = parseVector(body.position, 'Gaussian 中心');
+    const position = parseVector(body.position, '可见 GS 表面点');
     const normal = parseNormal(body.normal);
     const selectionRadiusPixels = parseSelectionRadius(body.selectionRadiusPixels);
     const neighborCount = Number(body.neighborCount);
     if (!Number.isInteger(neighborCount) || neighborCount < 3) {
-      throw Object.assign(new Error('圆形多选点集至少需要 3 个 Gaussian 中心。'), { statusCode: 400 });
+      throw Object.assign(new Error('5px 区域至少需要 3 个 GPU 前表面深度采样点。'), { statusCode: 400 });
     }
-    if (body.pickBackend !== 'supersplat-centers-gpu-circle' ||
-        body.selectionDataSource !== 'resident-streamed-sog-lod') {
-      throw Object.assign(new Error('巡检点必须来自当前 LOD 的 5px GPU 圆形多选。'), { statusCode: 400 });
-    }
-    const residentLodLevels = Array.isArray(body.residentLodLevels)
-      ? [...new Set(body.residentLodLevels.map(Number).filter((value) => Number.isInteger(value) && value >= 0))]
-        .sort((a, b) => a - b)
-      : [];
-    const residentFileCount = Number(body.residentFileCount);
-    if (residentLodLevels.length === 0 || !Number.isInteger(residentFileCount) || residentFileCount < 1) {
-      throw Object.assign(new Error('当前 LOD 驻留快照无效。'), { statusCode: 400 });
+    if (body.pickBackend !== SURFACE_PICK_BACKEND ||
+        body.selectionDataSource !== SURFACE_SELECTION_DATA_SOURCE) {
+      throw Object.assign(new Error('巡检点必须来自 PlayCanvas 原生深度 Picker 的 5px Alpha 前表面选择。'), { statusCode: 400 });
     }
     const eigenvalues = Array.isArray(body.normalEigenvalues)
       ? body.normalEigenvalues.slice(0, 3).map(Number)
@@ -808,13 +805,13 @@ const handleApi = async (request, response, url) => {
       type: body.type,
       position,
       normal,
-      selectionMethod: 'loaded-lod-gpu-circle-pca-v1',
+      selectionMethod: SURFACE_SELECTION_METHOD,
       selectionRadiusPixels,
       neighborCount,
       normalPlanarity,
       normalEigenvalues: eigenvalues,
-      residentLodLevels,
-      residentFileCount,
+      residentLodLevels: [],
+      residentFileCount: 0,
       pickBackend: body.pickBackend,
       selectionDataSource: body.selectionDataSource,
       visualRevision: dataset.activeVisualRevision,

@@ -4,10 +4,11 @@ import { LABEL_TYPES } from './contracts';
 import { shortRevision } from './format';
 import { Button, EmptyState, Icon, SectionHeading, UiContainer } from './primitives';
 
-const LabelEditor = ({ initial, creating, selection, onCancel, onSave }: {
+const LabelEditor = ({ initial, creating, selection, startTypeAvailable, onCancel, onSave }: {
   initial: LabelMetadata;
   creating: boolean;
   selection?: PendingSelection;
+  startTypeAvailable: boolean;
   onCancel(): void;
   onSave(value: LabelMetadata): void;
 }) => {
@@ -15,10 +16,14 @@ const LabelEditor = ({ initial, creating, selection, onCancel, onSave }: {
   useEffect(() => setValue(initial), [initial.title, initial.description, initial.type]);
   return <div className="label-editor">
     <SectionHeading>{creating ? '初始化标签' : '编辑标签'}</SectionHeading>
-    {selection && <div className="selection-summary"><Icon name="pin"/><span>{selection.position.x.toFixed(3)}, {selection.position.y.toFixed(3)}, {selection.position.z.toFixed(3)}</span><small>{selection.neighborCount.toLocaleString('zh-CN')} GS</small></div>}
+    {selection && <div className="selection-summary"><Icon name="pin"/><span>{selection.position.x.toFixed(3)}, {selection.position.y.toFixed(3)}, {selection.position.z.toFixed(3)}</span><small>{selection.neighborCount.toLocaleString('zh-CN')} 个前表面采样</small></div>}
     <label className="field"><span>名称</span><input autoFocus maxLength={80} value={value.title} onChange={(event) => setValue({ ...value, title: event.target.value })} placeholder="例：1# 电机侧面"/></label>
     <label className="field"><span>说明</span><textarea rows={3} maxLength={500} value={value.description} onChange={(event) => setValue({ ...value, description: event.target.value })} placeholder="可选：记录观测对象或缺陷情况"/></label>
-    <fieldset className="type-select"><legend>类型</legend>{LABEL_TYPES.map((type) => <button type="button" key={type} aria-pressed={value.type === type} className={value.type === type ? 'is-active' : ''} onClick={() => setValue({ ...value, type })}><i/>{type}</button>)}</fieldset>
+    <fieldset className="type-select"><legend>类型</legend>{LABEL_TYPES.map((type) => {
+      const disabled = type === '起点' && !startTypeAvailable && value.type !== '起点';
+      return <button type="button" key={type} disabled={disabled} title={disabled ? '当前场景已有起点' : undefined} aria-pressed={value.type === type} className={value.type === type ? 'is-active' : ''} onClick={() => setValue({ ...value, type })}><i/>{type}</button>;
+    })}</fieldset>
+    {!startTypeAvailable && value.type !== '起点' && <small className="field-help">当前场景已有起点；每个场景最多一个。</small>}
     <div className="editor-actions"><Button tone="ghost" icon="close" onClick={onCancel}>取消</Button><Button tone="primary" icon="check" disabled={!value.title.trim()} onClick={() => onSave({ ...value, title: value.title.trim(), description: value.description.trim() })}>保存标签</Button></div>
   </div>;
 };
@@ -54,16 +59,16 @@ export const InspectionCard = (props: AppShellProps) => {
     title: `巡检点_${props.labelTotal + 1}`, description: '', type: '一般巡检点'
   }), [props.pendingSelection, props.labelTotal]);
   if (props.pendingSelection) return <UiContainer as="aside" variant="floating" className="inspection-card" aria-label="初始化巡检点">
-    <LabelEditor key={`${props.pendingSelection.position.x}:${props.pendingSelection.position.y}:${props.pendingSelection.position.z}`} initial={pendingInitial} creating selection={props.pendingSelection} onCancel={props.onCancelPending} onSave={props.onCreateLabel}/>
+    <LabelEditor key={`${props.pendingSelection.position.x}:${props.pendingSelection.position.y}:${props.pendingSelection.position.z}`} initial={pendingInitial} creating selection={props.pendingSelection} startTypeAvailable={!props.startLabelId} onCancel={props.onCancelPending} onSave={props.onCreateLabel}/>
   </UiContainer>;
   const label = props.selectedLabel;
   if (!label) return null;
   return <UiContainer as="aside" variant="floating" className="inspection-card" aria-label="巡检点详情">
-    {editing ? <LabelEditor initial={{ title: label.title, description: label.description, type: label.type }} creating={false} onCancel={() => setEditing(false)} onSave={(value) => { props.onUpdateLabel(label.id, value); setEditing(false); }}/>
+    {editing ? <LabelEditor initial={{ title: label.title, description: label.description, type: label.type }} creating={false} startTypeAvailable={!props.startLabelId || props.startLabelId === label.id} onCancel={() => setEditing(false)} onSave={(value) => { props.onUpdateLabel(label.id, value); setEditing(false); }}/>
       : <section className="label-detail">
         <div className="label-detail__head"><div><span>{label.type}</span><h2>{label.title}</h2></div><div className="card-head-actions"><Button size="compact" icon="edit" onClick={() => setEditing(true)}>编辑</Button><Button size="compact" tone="ghost" icon="close" aria-label="关闭巡检点卡片" onClick={props.onClearLabelSelection}>关闭</Button></div></div>
         {label.description && <p>{label.description}</p>}
-        <dl><div><dt>坐标 / m</dt><dd>{label.position.x.toFixed(3)}, {label.position.y.toFixed(3)}, {label.position.z.toFixed(3)}</dd></div><div><dt>法向</dt><dd>{label.normal ? `${label.normal.x.toFixed(4)}, ${label.normal.y.toFixed(4)}, ${label.normal.z.toFixed(4)}` : '—'}</dd></div><div><dt>拟合邻域</dt><dd>{label.neighborCount?.toLocaleString('zh-CN') ?? '—'} GS · {label.selectionRadiusPixels ?? 5}px</dd></div></dl>
+        <dl><div><dt>坐标 / m</dt><dd>{label.position.x.toFixed(3)}, {label.position.y.toFixed(3)}, {label.position.z.toFixed(3)}</dd></div><div><dt>法向</dt><dd>{label.normal ? `${label.normal.x.toFixed(4)}, ${label.normal.y.toFixed(4)}, ${label.normal.z.toFixed(4)}` : '—'}</dd></div><div><dt>拟合邻域</dt><dd>{label.neighborCount?.toLocaleString('zh-CN') ?? '—'} 个前表面采样 · {label.selectionRadiusPixels ?? 5}px</dd></div></dl>
         {confirmDelete ? <div className="inline-confirm"><span>{label.inUse ? '标签正在被任务使用' : '删除后不可恢复'}</span><Button size="compact" onClick={() => setConfirmDelete(false)}>取消</Button><Button size="compact" tone="danger" disabled={label.inUse} onClick={() => props.onDeleteLabel(label.id)}>确认删除</Button></div>
           : <Button icon="trash" tone="ghost" disabled={label.inUse} onClick={() => setConfirmDelete(true)}>{label.inUse ? `被 ${label.usageCount} 处引用` : '删除标签'}</Button>}
       </section>}

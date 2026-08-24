@@ -1,201 +1,127 @@
-# 巡检点圆选、法向量与空间标注原理
+# 巡检点前表面拾取、法向量与空间标注原理
 
-## 1. 文档目的
+## 1. 目的与结论
 
-本文说明当前 PlayCanvas 单渲染器版本中，巡检点如何从正在显示的 Gaussian Splatting LOD 中产生，如何通过 PCA 计算表面法向，以及巡检点、法向线和文字标签如何绑定到同一个局部工程坐标空间。
+巡检点必须落在操作者当前真正看到的 GS 前表面，不能沿视线穿过前墙后命中背面。当前实现采用 PlayCanvas 2.21.4 原生、启用深度的 `Picker`，让官方 GS 拾取 Pass 在 GPU 上完成 Gaussian 投影、Alpha 阈值、排序和深度遮挡；项目不再维护中心投影 Shader，也不枚举 PlayCanvas 私有 LOD interval。
 
-该流程负责“人工选择被观测表面并保存几何意图”。它不负责证明飞行安全：体素 SVO、机体膨胀扫掠、视线检查和航段复检仍是观察点及航线是否可用的安全依据。
+固定 5px 圆内的前表面深度样本只用于一个很小的 CPU PCA，以计算局部整体朝向。体素 SVO 不参与标签位置和法向，但继续作为无人机避障、机体膨胀扫掠和航线复检的唯一安全真值。
 
-## 2. 总体数据流
+## 2. 为什么旧 Centers 逻辑会穿墙
+
+旧版模仿 SuperSplat Centers 模式：把当前驻留 Gaussian 中心投影到屏幕，只检查中心是否进入 5px 圆。该判断没有像素深度与 Gaussian Alpha，前墙和后墙的中心只要投影落入同一个圆就会同时入选；位置可能落到后墙，PCA 也会混合两个平面。
+
+SuperSplat 官方文档明确区分两类语义：Centers 会选择所有落入区域的中心而不考虑深度，Rings 只选择最上层的可见 Gaussian。当前 V2 选择采用 Rings 的“可见前层”目标，但复用 PlayCanvas 公共 `Picker`，而不是复制 SuperSplat 编辑器的私有材质和选择器。
+
+## 3. 数据流与职责
 
 ```text
 一次鼠标单击
-  → PlayCanvas Picker 确认中心像素属于当前 GS Component
-  → 截取当前真正参与渲染的 Streamed SOG LOD interval
-  → GPU 投影全部驻留中心并执行半径 5px 的圆形判定
-  → 读回选择位图
-  → 圆内最接近点击投影的中心成为标签位置
-  → 圆内全部中心通过协方差 PCA 拟合单位法向
-  → 保存数据集、源摘要、视觉版本、位置、法向和采样来源
-  → 绘制小型红色 Mesh、1m 法向线和沿法向外移的文字
+  → 临时隐藏已有标签 Mesh / 法向线 / Text Element
+  → PlayCanvas Picker(depth=true) 执行一次官方 GPU 拾取 Pass
+  → 中心像素必须映射到当前 GS Component
+  → 中心像素返回 Alpha 合格且深度最近的 GS 世界点
+  → 5px 圆内固定 21 像素模板读取同一深度缓冲的前表面点
+  → 转回 local Z-up
+  → 对有效前表面样本做 3×3 协方差 PCA
+  → 法向符号朝向选择时相机
+  → 保存视觉版本、位置、法向、采样数和 PCA 统计
 ```
 
-这一交互是一次单击触发的圆形/多边形区域选择，不是可拖动的画笔。
+所有昂贵的 GS 可见性工作都在 PlayCanvas 官方 GPU Pass 中完成。CPU 只处理最多 21 个三维点，不扫描源 PLY、不扫描当前 LOD Gaussian、不建立全量索引，也不执行另一套 Alpha/深度算法。
 
-## 3. 坐标约定
+## 4. 官方 Picker 的可见性含义
 
-数据真值始终使用源 PLY 的局部 Z-up 米制工程坐标：
-
-```text
-local = (x, y, z)
-render = (x, z, -y)
-```
-
-GS 实体统一施加 `Rx(-90°)` 完成显示坐标映射。巡检点位置、PCA 法向、观察点和航线数据都保存为 local 坐标，不保存 PlayCanvas 渲染坐标。
-
-标签 Mesh、法向线和文字节点作为 GS 场景实体的子节点，直接使用 local 坐标，因此会继承同一变换，不需要分别维护第二套坐标转换。
-
-## 4. 为什么使用当前 LOD 中心
-
-当前需求要求标签直接来自用户看到的切片数据，而不是：
-
-- 扫描完整源 PLY；
-- 建立第二份全量 Gaussian 空间索引；
-- 用体素中心代替 GS 表面；
-- 依赖透明 GS 的深度缓冲近似命中。
-
-选择器读取 PlayCanvas 当前 GS 八叉树实例的 `activePlacements` 和 `filePlacements`，并保存每个文件当前生效的 interval。只有真正提交到本帧 LOD 的区间可以参与选择。已经预取、正在冷却或同一文件内暂未激活的区间都会被排除。
-
-PlayCanvas 2.21.4 暂无公开 API 直接枚举这些 interval，因此实现对固定版本的内部结构做了只读适配。找不到活动快照时必须失败并提示等待加载，不能退化为选择整个驻留文件。升级 PlayCanvas 时必须重新验证该结构。
-
-## 5. 5px GPU 圆形选择
-
-### 5.1 GS 组件门控
-
-初始化时设置：
+初始化固定执行：
 
 ```ts
 scene.gsplat.enableIds = true;
+picker = new Picker(app, 1, 1, true);
 ```
 
-随后用官方 `Picker` 检查点击中心像素是否映射到当前 GS Component。已有巡检点 Mesh、法向线和文字在新增标签的 Picker 阶段会临时禁用，避免业务覆盖物挡住 GS。
+`enableIds` 使统一 GS placement ID 能映射回当前 `GSplatComponent`；构造函数最后一个 `true` 使 Picker 同时输出深度。一次点击只调用一次 `prepare(camera, scene)`，随后通过公共 `getSelectionAsync` 和 `getWorldPointAsync` 读取结果。
 
-### 5.2 屏幕圆判定
+PlayCanvas 的 GS Pick Shader 使用 Gaussian 椭球的屏幕覆盖和 Alpha，并在 Alpha 小于 `alphaClip` 时丢弃片元；当前引擎默认拾取阈值为 0.3。深度缓冲保留同一像素最前方通过阈值的 Gaussian 片元，因此被前墙覆盖的后墙不会成为中心命中。
 
-半径固定为 5 个 Canvas CSS 像素，不开放调参。对 local 中心 `p` 使用当前模型-视图-投影矩阵：
+需要准确描述其边界：这是“单个 Gaussian Alpha 达到拾取阈值后的最近深度”，不是把正常透明混合帧的累计颜色反演成几何表面，也不是飞行碰撞真值。项目不修改 `alphaClip`，以免标签拾取与官方 Renderer 产生第二套参数。
 
-```text
-clip = MVP × (p, 1)
-ndc  = clip.xyz / clip.w
-screen.x = (ndc.x × 0.5 + 0.5) × viewportWidth
-screen.y = (-ndc.y × 0.5 + 0.5) × viewportHeight
-```
+## 5. 固定 5px 圆与法向拟合
 
-点击中心为 `c`，选择条件为：
+交互仍是一次点击、固定半径 5 CSS px，不是可拖动画笔，也不开放半径调参。为避免对同一个 GPU 深度纹理做 81 次小读回，当前模板取中心、内环、中环和 5px 边界共 21 个对称像素。超出画布或没有可见深度的样本被忽略，至少需要 3 个不重复且不共线的点。
 
-```text
-|screen - c|² ≤ 5²
-```
-
-WebGPU 使用原生 WGSL，WebGL2 使用 GLSL。每个驻留 Chunk 的中心被上传为临时 RGBA32F 纹理；输出 RGBA8 的每个像素打包 4 个 Gaussian 布尔结果。结果立即读回后，再用活动 interval 做一次 CPU 过滤。
-
-圆形选择只判断中心投影，不按透明 GS 深度裁剪。因此同一 5px 圆内、不同深度的多个表面可能同时进入样本。固定小半径能降低该概率，但不能把它等同于严格的可见表面分割。
-
-## 6. 标签位置与 PCA 法向
-
-### 6.1 标签位置
-
-在所有通过圆形判定的中心中，屏幕投影到点击中心距离最小的中心成为标签位置 `P`。屏幕距离相同时用投影深度作为次级排序。
-
-系统不会生成一个不存在于当前 LOD 的插值点，因此标签位置可追溯到实际参加选择的 Gaussian 中心。
-
-### 6.2 PCA 平面拟合
-
-设圆内选中中心为 `p₁ ... pₙ`，要求 `n ≥ 3`。先计算质心：
+中心像素的 `getWorldPointAsync` 结果是标签位置 `P`。其余样本只计算法向：
 
 ```text
 μ = (1 / n) Σ pᵢ
-```
-
-再计算 3×3 协方差矩阵：
-
-```text
 C = (1 / n) Σ (pᵢ - μ)(pᵢ - μ)ᵀ
 ```
 
-实现使用 Jacobi 旋转迭代求解对称矩阵特征值和特征向量。最小特征值对应的单位特征向量是局部点集变化最小的方向，因此作为拟合平面的法向 `N`。
-
-特征向量的正负号本身不唯一。系统令法向朝向点击时的相机侧：
+Jacobi 迭代求解对称矩阵 `C`，最小特征值对应的单位特征向量作为局部拟合平面法向 `N`。样本接近一条线时失败并要求调整视角，不保存任意方向。因为特征向量正负号不唯一，最终执行：
 
 ```text
 若 N · (cameraLocal - μ) < 0，则 N = -N
 ```
 
-因此在操作者从物体外侧点击时，`N` 通常表示表面外侧及首选观察侧。
+这使法向朝向选择时相机所在的一侧，符合操作者从物体外侧点击时的观察意图。`normalPlanarity` 和三个特征值只用于诊断，不是安全证明。
 
-当前 `normalPlanarity` 为辅助诊断量：
+## 6. 坐标与版本
 
-```text
-normalPlanarity = 1 - λmin / (λ₁ + λ₂ + λ₃)
-```
-
-它用于记录最小方向相对总方差的占比，不应单独当作严格的平面质量证明。多层表面、细长结构或离群点仍可能产生不理想法向。
-
-## 7. 保存与版本依赖
-
-后端保存并校验：
-
-- 数据集 ID、源 PLY SHA-256；
-- 活动视觉 revision；
-- local 标签位置和归一化法向；
-- 固定 5px 选择半径；
-- 参与 PCA 的中心数量；
-- 驻留 LOD 层和文件数量；
-- PCA 特征值及诊断量；
-- 选择后端与数据来源标识。
-
-标签绑定活动视觉 revision，因为不同切片版本的中心集合可能变化。切换视觉版本后，旧标签必须重新选择；依赖其几何的航线不能继续被表示为有效结果。
-
-## 8. 巡检点、法向线和文字展示
-
-保存后的标签包含三类同空间对象：
-
-1. 小型红色 Sphere Mesh：表示被观测位置，使用正常深度测试；被选中时变为蓝色并适度放大。
-2. 橙色法向段：从 `P` 沿归一化 `N` 绘制 1m，使用细圆柱 Mesh 表达方向，也映射到同一标签的 Picker ID。
-3. 世界空间文字：锚点放在法向线末端之外 0.12m：
+持久化真值仍是源 PLY 的局部 Z-up 米制坐标：
 
 ```text
-textAnchor = P + N × 1.12m
+local  = (x, y, z)
+render = (x, z, -y)
 ```
 
-文字锚点沿法向移出模型表面，但文字平面仍逐帧朝向相机。若把文字平面本身固定朝法向，常见侧视角会看到接近零面积的边缘，反而无法阅读。
+Picker 返回 PlayCanvas 世界坐标后，使用当前场景根节点逆矩阵转回 local；位置与法向绝不保存为 Renderer 坐标。
 
-这三类对象都属于现有 PlayCanvas 场景，不创建第二个 Canvas、Renderer 或 GPU 上下文。选中中心集合只用于位置和 PCA，不再创建临时红色 Gaussian 调试层。
+新标签记录：
 
-GS、体素调试网格和标签属于同一坐标根节点下的独立子节点。取消勾选“显示高斯”只关闭 GS Entity，不会隐藏已有标签；进入新标签选择时会重新开启 GS。体素调试 Mesh 固定不可拾取，既不能成为圆选命中，也不能拦截标签点击。其完整原理见 [`VOXEL_COLLISION_DEBUG.md`](VOXEL_COLLISION_DEBUG.md)。
+- `selectionMethod = playcanvas-picker-depth-pca-v2`；
+- `pickBackend = playcanvas-native-depth-picker`；
+- `selectionDataSource = rendered-alpha-front-surface`；
+- 源 PLY SHA-256、活动视觉 revision、5px、有效样本数、PCA 特征值和平面度。
 
-## 9. 法向如何进入观察点与观察方向
+V2 不读取私有 LOD residency，因此旧数据库的 `residentLodLevels` / `residentFileCount` 兼容列写为 `[]` / `0`。历史 V1 标签在其原视觉 revision 内仍可显示；新建接口只接受 V2 证据。激活新视觉 revision 后，无论 V1/V2 都必须重新选择，并使依赖几何的航线失效。
 
-对标签位置 `P`、单位法向 `N` 和业务观察距离 `d`，名义观察几何为：
+## 7. 标注和观察方向
+
+保存后的标签使用正常深度关系绘制：
+
+1. 小型红色 Sphere Mesh 表示 `P`，选中时变蓝并适度放大；
+2. 1m 橙色圆柱从 `P` 沿单位 `N` 延伸；
+3. Text Element 锚点位于 `P + N × 1.12m`，文字平面逐帧面向相机。
+
+它们都属于同一 PlayCanvas 场景和 GPU 上下文，能够被建筑正确遮挡。文字沿法向移出表面，但不把文字平面固定为法向朝向，否则常见侧视角会变成不可读的薄边。
+
+名义观察关系为：
 
 ```text
-preferredObservation = P + N × d
-nominalViewDirection = normalize(P - preferredObservation) = -N
+preferredObservation = P + N × observationDistance
+nominalViewDirection = -N
 ```
 
-这只定义观察意图。生产规划不能直接接受该点，必须继续：
+这只是观察意图。最终观察点和航线仍必须通过 SVO 膨胀净空、目标视线、连接航段扫掠与最终复检。
 
-1. 在外法向附近的候选锥中搜索可用观察点；
-2. 验证观察点满足无人机半径和安全余量的 SVO 膨胀净空；
-3. 验证观察点到标签的视线；
-4. 连接前后航点并进行扫掠碰撞、平滑和最终航段复检；
-5. 失败时保持无效或仅输出已独立复检的安全前缀，不得导出为有效航线。
+## 8. 生命周期与验收
 
-前端法向线是展示对象，不参与碰撞判断，也不能成为另一套规划真值。
+- 每次点击只准备一次 Picker；异步读回通过场景 generation 丢弃过期结果；
+- 已有标注只在准备拾取缓冲时临时禁用，并恢复原 enabled 状态；
+- 场景切换、清除或销毁等待当前拾取结束后再销毁唯一 Picker/Application；
+- 已删除自定义中心纹理、RGBA 掩码、WGSL/GLSL 选择 Shader、活动 LOD 私有适配和相关缓存清理循环；
+- 不修改官方 GS Shader、SOG Loader、LOD 调度、Alpha 参数或视觉输出。
 
-## 10. GPU 与资源生命周期
+验收重点：
 
-- 当前驻留资源可缓存一份临时中心纹理；离开活动 LOD 后释放。
-- 不同尺寸的 RGBA8 输出纹理可以复用。
-- GPU 异步读回期间禁止清除其纹理；清除请求延迟到读回结束。
-- 重复点击、切换场景、清除显示和销毁应用时，Picker 映射、中心纹理、结果纹理、Shader、Mesh、法向线、Text Element 和材质都必须只销毁一次。
-- 过期异步结果通过场景 generation 检查被丢弃，不能访问已销毁对象。
-- 选择 Pass 不修改官方 GS 显示 Shader、Streamed SOG Loader 或 LOD 调度器。
+- 同一屏幕位置存在前后两堵墙时，命中前墙而不是后墙；
+- 竖直、水平和倾斜表面的法向朝向选择相机侧；
+- 轮廓边缘样本不足或退化时明确失败，不保存猜测法向；
+- WebGPU 与 WebGL2 都使用 `getSelectionAsync/getWorldPointAsync`；
+- 重复点击、缩放、LOD 更替、场景切换和清除显示无资源增长或 destroyed-object 异常；
+- 标签位置/法向变化后的航线必须重新规划，体素和规划安全规则不变。
 
-## 11. 代码位置与验收重点
+代码位置：
 
-- GPU 圆选与 PCA：`src/gaussian-circle-selector.ts`
-- PlayCanvas Picker、标签 Mesh、法向线和文字：`src/viewer.ts`
-- React UI 状态、场景卡片和标签同步：`src/main.tsx`
-- 标签 API、版本及输入校验：`server.mjs`
-
-验收至少包括：
-
-- GS 外点击不创建标签，GS 内点击固定使用 5px 圆；
-- 只选择当前活动 interval，不选择预取或非活动范围；
-- 保存法向为单位向量并朝向点击相机侧；
-- 法向线起点、长度和方向与保存数据一致；
-- 文字锚点满足 `P + N × 1.12m`，旋转相机时保持可读；
-- 标签 Mesh、法向线和文字被模型遮挡时不穿墙；
-- 重复选择、LOD 淘汰、场景切换和清除显示不产生资源增长或 destroyed-object 异常；
-- 视觉版本变化后旧标签与依赖航线不得继续标记为有效。
+- 官方 Picker 与坐标转换：`src/viewer.ts`；
+- 固定模板与 PCA：`src/gaussian-surface-selector.ts`；
+- 标签 API 与 V2 证据校验：`server.mjs`；
+- SQLite CRUD：`server/label-store.mjs`。
