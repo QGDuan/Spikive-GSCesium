@@ -173,7 +173,7 @@ test('四类型 SQLite 旧库自动迁移且保留标签和引用', async () => 
 
   const store = new LabelStore(path);
   try {
-    assert.equal(store.database.prepare('PRAGMA user_version').get().user_version, 2);
+    assert.equal(store.database.prepare('PRAGMA user_version').get().user_version, 3);
     assert.equal(store.get(label.id).usageCount, 1);
     assert.equal(store.get(label.id).type, label.type);
     assert.throws(() => store.delete(label.id), /正在被/);

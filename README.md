@@ -12,6 +12,7 @@
 - React 标签管理、SQLite CRUD 与业务边界：[`docs/LABEL_MANAGEMENT.md`](docs/LABEL_MANAGEMENT.md)；
 - 起点唯一约束、标签后端鲁棒性与历史图片扩展：[`docs/LABEL_HISTORY_MEDIA_DESIGN.md`](docs/LABEL_HISTORY_MEDIA_DESIGN.md)；
 - React UI 设计系统、容器原语与后续开发规范：[`docs/UI_SYSTEM.md`](docs/UI_SYSTEM.md)。
+- 飞行路线、观察节点、SVO 膨胀避障与数据库闭环：[`docs/FLIGHT_ROUTE_PLANNING.md`](docs/FLIGHT_ROUTE_PLANNING.md)。
 
 ## 1. 前置条件及环境配置
 
@@ -104,6 +105,8 @@ LOD0 直接使用完整源 PLY，不执行抽稀。其余层串行调用官方 `
 
 体素化读取不可变的完整源 PLY，而不是抽稀 LOD。它调用 `splat-transform 3.3.0` 官方 WebGPU 并行体素化，生成 `scene.voxel.json` 与 `scene.voxel.bin` 稀疏体素八叉树，同时用官方 `--collision-mesh faces` 生成同版本的 `scene.collision.glb` 调试面网格。系统不执行 floor/external fill、carve 或自动调参；航线避障所需的计算真值始终是 SVO，GLB 只负责让人检查体素覆盖是否合理。
 
+`splat-transform` 将 PLY 标记为绕 Z 轴旋转 180° 的 PLY 坐标约定，而 `.voxel.json`/碰撞 GLB 会烘焙到工具的 identity 坐标。数据库与界面继续保存源 PLY 局部坐标；SVO 查询入口和调试 GLB 节点统一执行 `voxel=(-source.x,-source.y,source.z)`，路线算法内部始终只接触源 PLY 坐标。这个适配是刚性旋转，不改变距离、法向长度或膨胀半径。
+
 如果分辨率导致资源不足，任务会失败并给出错误，系统不会自行改粗体素。用户调整卡片参数后重新计算。
 
 ### 调试显示体素
@@ -139,6 +142,8 @@ LOD0 直接使用完整源 PLY，不执行抽稀。其余层串行调用官方 `
 
 该交互不是可拖动的画笔，而是一次单击触发的固定 5px 前表面采样，界面不提供半径调参。该流程不读取原始 PLY、不枚举私有 LOD、不创建第二份源点索引，也不使用体素决定标签位置或法向量；体素 SVO 只服务后续避障和航线安全计算。标签记录源摘要、活动视觉 revision、前表面采样数量和 PCA 统计。切换视觉 revision 后，旧标签会显示为过期，必须在新视觉版本上重新选择。
 
+顶部“航线”是与场景、标签平级的独立页签，只绑定当前已加载场景。每条航线必须指定唯一的起点标签、至少一个有序巡检标签，以及飞行速度、无人机膨胀系数、观察距离和最大/最小点间距。起点沿自身法向固定起飞 1.5m，不使用观察距离；巡检标签才由位置、法向和观察距离生成观察节点。巡检视线只允许在标签法向外侧最多四个体素内跳过保守体素化形成的表面厚度，并以第一个自由采样点作为视线终点，不能穿透任意厚度的实体。后端使用当前 SVO 依次执行起飞通道检查、直线膨胀扫掠、26 邻域 A*、安全快捷化、间距细分和最终逐段复检。完整规则和 API 见 [`docs/FLIGHT_ROUTE_PLANNING.md`](docs/FLIGHT_ROUTE_PLANNING.md)。
+
 巡检点 Mesh、法向线与文字使用正常深度关系，不使用始终置顶的 HTML/Sprite 标记，所以被建筑遮挡时不会穿墙显示。文字位置沿法向移到模型表面外侧，文字平面继续朝向相机以保持可读性。法向线完全由标签保存的局部 Z-up 单位法向生成，只用于表达表面朝向；观察点可优先沿法向外侧搜索，观察方向应朝回标签，并仍需通过 SVO 膨胀碰撞与视线复检。场景切换时会先停止新的拾取；正在进行的 GPU 读回完成前不会销毁选择纹理，随后再释放旧 LOD 缓存、Mesh、法向线、Text Element 与拾取映射。
 
 可见性和 Alpha 计算完全复用 PlayCanvas 官方 GPU Picker，项目不再维护中心纹理、RGBA 选择掩码、WGSL/GLSL 选择 Shader 或 active-placement 私有适配。CPU 只对最多 21 个前表面点计算 3×3 PCA，不修改 PlayCanvas 官方 GS 渲染 Shader、Alpha 参数、LOD 加载器或 SOG 数据。
@@ -152,7 +157,7 @@ LOD0 直接使用完整源 PLY，不执行抽稀。其余层串行调用官方 `
 
 顶部显示实际 PlayCanvas 后端（WebGPU 或 WebGL2）。右下角紧凑性能卡片只显示 FPS、可见 Gaussian、系统 CPU、系统内存和 PlayCanvas 跟踪的 GPU 资源估算。选中巡检点后，详情与编辑卡片独立显示在右上角。
 
-管理界面采用统一的 SuperSplat 风格设计系统：顶部只保留场景/标签两个主入口，颜色、字体、间距、圆角、阴影和布局尺寸集中在 `src/ui/theme.css`，所有面板和卡片通过 `UiContainer` 变体管理。React 根节点本身不拦截视口事件，只有可见面板接收指针，因此空白三维区域仍由 PlayCanvas 相机、GS 圆选和标签 Mesh 拾取处理。窄屏会收紧面板并扩大触摸目标；键盘焦点使用橙色高可见轮廓。具体扩展规则见 [`docs/UI_SYSTEM.md`](docs/UI_SYSTEM.md)。
+管理界面采用统一的 SuperSplat 风格设计系统：顶部保留场景/标签/航线三个主入口，颜色、字体、间距、圆角、阴影和布局尺寸集中在 `src/ui/theme.css`，所有面板和卡片通过 `UiContainer` 变体管理。React 根节点本身不拦截视口事件，只有可见面板接收指针，因此空白三维区域仍由 PlayCanvas 相机、GS 圆选和标签 Mesh 拾取处理。窄屏会收紧面板并扩大触摸目标；键盘焦点使用橙色高可见轮廓。具体扩展规则见 [`docs/UI_SYSTEM.md`](docs/UI_SYSTEM.md)。
 
 浏览器标准 API 不提供可靠的整机 GPU 利用率和物理显存占用，因此界面只显示 PlayCanvas 可核算的 GPU 资源估算，不用估算值冒充整机显存。
 
@@ -178,7 +183,7 @@ var/
 ```
 
 - `dataset.json`：视觉与体素的独立状态、参数、摘要和活动版本；
-- `labels.sqlite`：标签 CRUD、类型/空间索引和业务引用的唯一数据库真源；
+- `labels.sqlite`：标签、航线、顺序标签、航点、类型/空间索引和业务引用的唯一数据库真源；
 - `labels.json`：旧版标签的幂等迁移来源，迁移不删除文件，也不会覆盖数据库中后续编辑；
 - `source.ply`：不可变的完整细节真值；
 - `visual-revisions`：构建校验通过后原子发布的 SOG；

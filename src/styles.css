@@ -177,6 +177,34 @@ progress::-webkit-progress-value, progress::-moz-progress-bar { background: var(
 .label-detail dd { margin: 0; overflow-wrap: anywhere; color: var(--ui-color-text-secondary); font-family: var(--ui-font-mono); text-align: right; }
 .card-head-actions { display: flex; align-items: center; gap: var(--ui-space-1); }
 
+.mission-create { display: grid; gap: var(--ui-space-4); padding: var(--ui-space-4); }
+.mission-profile { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ui-space-2); }
+.mission-profile label { display: grid; gap: var(--ui-space-1); }
+.mission-profile label:last-child { grid-column: span 2; }
+.mission-profile span { color: var(--ui-color-text-muted); font-size: var(--ui-font-size-caption); }
+.mission-profile input { height: var(--ui-control-height-compact); font-size: var(--ui-font-size-helper); }
+.mission-targets { display: grid; gap: var(--ui-space-1); margin: 0; padding: var(--ui-space-5) 0 0; border: 0; }
+.mission-targets legend { position: absolute; color: var(--ui-color-text-muted); font-size: var(--ui-font-size-helper); }
+.mission-targets > small { color: var(--ui-color-text-faint); font-size: var(--ui-font-size-caption); }
+.mission-targets button { display: grid; min-height: var(--ui-control-height); grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: var(--ui-space-2); padding: 0 var(--ui-space-3); border: 1px solid var(--ui-color-border); border-radius: var(--ui-radius-control); background: var(--ui-color-card-hover); color: var(--ui-color-text-muted); cursor: pointer; text-align: left; }
+.mission-targets button:hover { border-color: var(--ui-color-border-hover); color: var(--ui-color-text-secondary); }
+.mission-targets button.is-active { border-color: var(--ui-color-accent); background: var(--ui-color-accent-tint); color: var(--ui-color-text); }
+.mission-targets button i { display: grid; width: 20px; height: 20px; place-items: center; border: 1px solid var(--ui-color-border-strong); border-radius: var(--ui-radius-round); color: var(--ui-color-accent-soft); font: var(--ui-font-weight-semibold) var(--ui-font-size-caption)/1 var(--ui-font-mono); font-style: normal; }
+.mission-targets button span { overflow: hidden; font-size: var(--ui-font-size-label); text-overflow: ellipsis; white-space: nowrap; }
+.mission-targets button small { color: var(--ui-color-text-faint); font-size: var(--ui-font-size-caption); }
+.mission-list-heading { margin: var(--ui-space-6) 1px var(--ui-space-3); }
+.mission-list { display: grid; gap: var(--ui-space-3); }
+.mission-card { padding: var(--ui-space-3); }
+.mission-card.is-selected { border-color: var(--ui-color-accent-border); box-shadow: inset 2px 0 var(--ui-color-accent); }
+.mission-card__select { display: flex; width: 100%; align-items: flex-start; justify-content: space-between; gap: var(--ui-space-3); padding: var(--ui-space-1); border: 0; background: transparent; cursor: pointer; text-align: left; }
+.mission-card__select > span:first-child { display: grid; min-width: 0; gap: 3px; }
+.mission-card__select strong { overflow: hidden; color: var(--ui-color-text); font-size: var(--ui-font-size-label); text-overflow: ellipsis; white-space: nowrap; }
+.mission-card__select small { color: var(--ui-color-text-muted); font: var(--ui-font-weight-medium) var(--ui-font-size-caption)/1 var(--ui-font-mono); }
+.mission-card__profile { display: flex; flex-wrap: wrap; gap: var(--ui-space-1) var(--ui-space-3); margin-top: var(--ui-space-2); padding: var(--ui-space-2) var(--ui-space-1); border-top: 1px solid var(--ui-color-border-muted); color: var(--ui-color-text-faint); font: var(--ui-font-weight-medium) var(--ui-font-size-caption)/1.3 var(--ui-font-mono); }
+.mission-error { margin: var(--ui-space-2) var(--ui-space-1); color: var(--ui-color-danger-text); font-size: var(--ui-font-size-caption); line-height: var(--ui-line-body); }
+.mission-card__actions { display: flex; align-items: center; gap: var(--ui-space-1); margin-top: var(--ui-space-2); }
+.mission-card__actions .ui-button:first-child { margin-right: auto; }
+
 .performance-card { position: fixed; z-index: var(--ui-layer-performance); right: var(--ui-space-6); bottom: var(--ui-space-6); width: var(--ui-performance-width); }
 .performance-card header { display: flex; height: var(--ui-control-height-compact); align-items: center; padding: 0 var(--ui-space-3); }
 .performance-card header span { display: flex; align-items: center; gap: var(--ui-space-2); color: var(--ui-color-text-muted); font-size: var(--ui-font-size-caption); }

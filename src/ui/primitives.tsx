@@ -6,7 +6,7 @@ import {
 } from 'react';
 
 export type IconName = 'database' | 'tag' | 'refresh' | 'upload' | 'eye' | 'cube' |
-  'trash' | 'plus' | 'search' | 'pin' | 'edit' | 'close' | 'check';
+  'trash' | 'plus' | 'search' | 'pin' | 'edit' | 'close' | 'check' | 'route';
 
 export const cx = (...values: Array<string | false | null | undefined>) => values.filter(Boolean).join(' ');
 
@@ -24,7 +24,8 @@ export const Icon = ({ name }: { name: IconName }) => {
     pin: <><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></>,
     edit: <><path d="m4 20 4.5-1 10-10-3.5-3.5-10 10Z"/><path d="m13.5 6.5 3.5 3.5"/></>,
     close: <path d="m6 6 12 12M18 6 6 18"/>,
-    check: <path d="m5 12 4 4L19 6"/>
+    check: <path d="m5 12 4 4L19 6"/>,
+    route: <><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/><path d="M7 18h3a3 3 0 0 0 3-3V9a3 3 0 0 1 3-3h1"/></>
   };
   return <svg className="ui-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
 };

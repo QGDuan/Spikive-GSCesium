@@ -9,7 +9,7 @@ export const LABEL_TYPES = Object.freeze([
 ]);
 
 export const START_LABEL_TYPE = '起点';
-const LABEL_SCHEMA_VERSION = 2;
+const LABEL_SCHEMA_VERSION = 3;
 const DEFAULT_LABEL_TYPE = '一般巡检点';
 const json = (value) => JSON.stringify(value ?? null);
 const parseJson = (value, fallback) => {
@@ -135,6 +135,54 @@ const createIndexes = (database) => database.exec(`
     ON labels(dataset_id) WHERE type = '起点';
   CREATE INDEX IF NOT EXISTS label_references_owner
     ON label_references(owner_type, owner_id);
+  CREATE INDEX IF NOT EXISTS missions_dataset_updated
+    ON missions(dataset_id, updated_at DESC);
+  CREATE INDEX IF NOT EXISTS mission_labels_label
+    ON mission_labels(label_id);
+  CREATE INDEX IF NOT EXISTS waypoints_mission_sequence
+    ON waypoints(mission_id, sequence);
+`);
+
+const createMissionSchema = (database) => database.exec(`
+  CREATE TABLE IF NOT EXISTS missions (
+    id TEXT PRIMARY KEY,
+    dataset_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    start_label_id TEXT NOT NULL REFERENCES labels(id) ON DELETE RESTRICT,
+    speed REAL NOT NULL,
+    inflation_radius REAL NOT NULL,
+    observation_distance REAL NOT NULL,
+    minimum_spacing REAL NOT NULL,
+    maximum_spacing REAL NOT NULL,
+    collision_revision TEXT,
+    status TEXT NOT NULL CHECK (status IN ('draft', 'valid', 'invalid')),
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS mission_labels (
+    mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+    label_id TEXT NOT NULL REFERENCES labels(id) ON DELETE RESTRICT,
+    sequence INTEGER NOT NULL,
+    PRIMARY KEY(mission_id, label_id),
+    UNIQUE(mission_id, sequence)
+  );
+  CREATE TABLE IF NOT EXISTS waypoints (
+    id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('start', 'inspection', 'transit')),
+    position_x REAL NOT NULL,
+    position_y REAL NOT NULL,
+    position_z REAL NOT NULL,
+    yaw REAL NOT NULL,
+    pitch REAL NOT NULL,
+    speed REAL NOT NULL,
+    target_label_id TEXT REFERENCES labels(id) ON DELETE RESTRICT,
+    clearance REAL NOT NULL,
+    valid INTEGER NOT NULL,
+    UNIQUE(mission_id, sequence)
+  );
 `);
 
 const tableExists = (database, name) => Boolean(database.prepare(`
@@ -185,6 +233,7 @@ const initializeSchema = (database) => {
   } else if (!tableExists(database, 'label_references')) {
     database.exec(labelReferencesTableSql('label_references', 'labels'));
   }
+  createMissionSchema(database);
   createIndexes(database);
   database.exec(`PRAGMA user_version = ${LABEL_SCHEMA_VERSION};`);
   const violations = database.prepare('PRAGMA foreign_key_check').all();
@@ -357,6 +406,17 @@ export class LabelStore {
       ? current.description
       : normalizeText(patch.description, '标签说明', 500);
     const type = patch.type === undefined ? current.type : assertLabelType(patch.type);
+    if (current.type === START_LABEL_TYPE && type !== START_LABEL_TYPE) {
+      const startReference = this.database.prepare(`
+        SELECT 1 FROM label_references
+        WHERE label_id = ? AND owner_type = 'mission-start' LIMIT 1
+      `).get(labelId);
+      if (startReference) {
+        const error = new Error('该起点正在被航线使用，请先删除相关航线后再修改类型。');
+        error.statusCode = 409;
+        throw error;
+      }
+    }
     try {
       this.database.prepare(`
         UPDATE labels SET title = ?, description = ?, type = ?, updated_at = ? WHERE id = ?

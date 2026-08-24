@@ -33,10 +33,36 @@ const intersectRayBounds = (origin, direction, bounds) => {
 };
 
 const arrayVector = (value) => ({ x: value[0], y: value[1], z: value[2] });
+const distance = (from, to) => Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z);
+
+// splat-transform labels PLY inputs with its PLY coordinate convention: a
+// 180-degree rotation around Z. Streamed SOG remains in that source PLY frame,
+// while voxel output is baked into the tool's identity frame. The platform's
+// persisted domain coordinates intentionally follow the displayed source PLY,
+// so SVO queries need this rigid, self-inverse adapter at the storage boundary.
+export const PLY_SOURCE_TO_VOXEL_IDENTITY = 'ply-source-to-voxel-identity-z180';
+
+const rotateZ180 = (point) => ({ x: -point.x, y: -point.y, z: point.z });
+const negateWithoutNegativeZero = (value) => value === 0 ? 0 : -value;
+const transformBounds = (bounds, coordinateTransform) => {
+  if (coordinateTransform !== PLY_SOURCE_TO_VOXEL_IDENTITY) return bounds;
+  return {
+    min: {
+      x: negateWithoutNegativeZero(bounds.max.x),
+      y: negateWithoutNegativeZero(bounds.max.y),
+      z: bounds.min.z
+    },
+    max: {
+      x: negateWithoutNegativeZero(bounds.min.x),
+      y: negateWithoutNegativeZero(bounds.min.y),
+      z: bounds.max.z
+    }
+  };
+};
 
 /** Read-only runtime query for splat-transform voxel format v1.1. */
 export class VoxelWorld {
-  constructor(metadata, binary) {
+  constructor(metadata, binary, { coordinateTransform = 'identity' } = {}) {
     if (metadata.version !== '1.1' || metadata.leafSize !== 4) {
       throw new Error(`不支持的体素格式：${metadata.version ?? '未知'}`);
     }
@@ -47,35 +73,55 @@ export class VoxelWorld {
     this.metadata = metadata;
     this.nodes = words.slice(0, metadata.nodeCount);
     this.leafData = words.slice(metadata.nodeCount);
-    this.bounds = {
+    this.coordinateTransform = coordinateTransform;
+    this.voxelBounds = {
       min: arrayVector(metadata.gridBounds.min),
       max: arrayVector(metadata.gridBounds.max)
     };
+    this.bounds = transformBounds(this.voxelBounds, coordinateTransform);
   }
 
-  static async load(jsonPath) {
+  static async load(jsonPath, options) {
     const metadata = JSON.parse(await readFile(jsonPath, 'utf8'));
     const binaryPath = jsonPath.replace(/\.voxel\.json$/i, '.voxel.bin');
-    return new VoxelWorld(metadata, await readFile(binaryPath));
+    return new VoxelWorld(metadata, await readFile(binaryPath), options);
   }
 
   get byteLength() {
     return this.nodes.byteLength + this.leafData.byteLength;
   }
 
-  contains(point) {
-    const { min, max } = this.bounds;
+  get resolution() {
+    return this.metadata.voxelResolution;
+  }
+
+  toVoxelPoint(point) {
+    return this.coordinateTransform === PLY_SOURCE_TO_VOXEL_IDENTITY ? rotateZ180(point) : point;
+  }
+
+  containsVoxelPoint(point) {
+    const { min, max } = this.voxelBounds;
     return point.x >= min.x && point.y >= min.y && point.z >= min.z &&
       point.x < max.x && point.y < max.y && point.z < max.z;
   }
 
+  contains(point) {
+    return this.containsVoxelPoint(this.toVoxelPoint(point));
+  }
+
   isOccupied(point) {
-    if (!this.contains(point) || this.nodes.length === 0) return false;
-    const { min } = this.bounds;
-    const resolution = this.metadata.voxelResolution;
-    const vx = Math.floor((point.x - min.x) / resolution);
-    const vy = Math.floor((point.y - min.y) / resolution);
-    const vz = Math.floor((point.z - min.z) / resolution);
+    const voxelPoint = this.toVoxelPoint(point);
+    if (!this.containsVoxelPoint(voxelPoint) || this.nodes.length === 0) return false;
+    const { min } = this.voxelBounds;
+    const resolution = this.resolution;
+    const vx = Math.floor((voxelPoint.x - min.x) / resolution);
+    const vy = Math.floor((voxelPoint.y - min.y) / resolution);
+    const vz = Math.floor((voxelPoint.z - min.z) / resolution);
+    return this.isOccupiedVoxel(vx, vy, vz);
+  }
+
+  isOccupiedVoxel(vx, vy, vz) {
+    if (vx < 0 || vy < 0 || vz < 0 || this.nodes.length === 0) return false;
     const bx = vx >> 2;
     const by = vy >> 2;
     const bz = vz >> 2;
@@ -100,6 +146,78 @@ export class VoxelWorld {
     const voxelBit = (vx & 3) | ((vy & 3) << 2) | ((vz & 3) << 4);
     const word = this.leafData[leafIndex * 2 + (voxelBit >= 32 ? 1 : 0)] ?? 0;
     return ((word >>> (voxelBit & 31)) & 1) === 1;
+  }
+
+  /** Conservative sphere-vs-occupied-voxel-cube query in local Z-up meters. */
+  sphereIsFree(point, radius) {
+    const voxelPoint = this.toVoxelPoint(point);
+    if (!Number.isFinite(radius) || radius < 0 || !this.containsVoxelPoint(voxelPoint)) return false;
+    const { min, max } = this.voxelBounds;
+    if (voxelPoint.x - radius < min.x || voxelPoint.y - radius < min.y || voxelPoint.z - radius < min.z ||
+        voxelPoint.x + radius >= max.x || voxelPoint.y + radius >= max.y || voxelPoint.z + radius >= max.z) return false;
+    if (radius === 0) {
+      const vx = Math.floor((voxelPoint.x - min.x) / this.resolution);
+      const vy = Math.floor((voxelPoint.y - min.y) / this.resolution);
+      const vz = Math.floor((voxelPoint.z - min.z) / this.resolution);
+      return !this.isOccupiedVoxel(vx, vy, vz);
+    }
+    const step = this.resolution;
+    const firstX = Math.floor((voxelPoint.x - radius - min.x) / step);
+    const firstY = Math.floor((voxelPoint.y - radius - min.y) / step);
+    const firstZ = Math.floor((voxelPoint.z - radius - min.z) / step);
+    const lastX = Math.floor((voxelPoint.x + radius - min.x) / step);
+    const lastY = Math.floor((voxelPoint.y + radius - min.y) / step);
+    const lastZ = Math.floor((voxelPoint.z + radius - min.z) / step);
+    const radiusSquared = radius * radius;
+    for (let vz = firstZ; vz <= lastZ; vz += 1) {
+      for (let vy = firstY; vy <= lastY; vy += 1) {
+        for (let vx = firstX; vx <= lastX; vx += 1) {
+          if (!this.isOccupiedVoxel(vx, vy, vz)) continue;
+          const cellMinX = min.x + vx * step;
+          const cellMinY = min.y + vy * step;
+          const cellMinZ = min.z + vz * step;
+          const nearestX = Math.max(cellMinX, Math.min(voxelPoint.x, cellMinX + step));
+          const nearestY = Math.max(cellMinY, Math.min(voxelPoint.y, cellMinY + step));
+          const nearestZ = Math.max(cellMinZ, Math.min(voxelPoint.z, cellMinZ + step));
+          const dx = voxelPoint.x - nearestX;
+          const dy = voxelPoint.y - nearestY;
+          const dz = voxelPoint.z - nearestZ;
+          if (dx * dx + dy * dy + dz * dz <= radiusSquared) return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /** Phase-stable swept sphere; endpoints and every half-voxel interval use the same rule. */
+  segmentIsFree(from, to, radius) {
+    const count = Math.max(1, Math.ceil(distance(from, to) / (this.resolution * 0.5)));
+    for (let index = 0; index <= count; index += 1) {
+      const t = index / count;
+      if (!this.sphereIsFree({
+        x: from.x + (to.x - from.x) * t,
+        y: from.y + (to.y - from.y) * t,
+        z: from.z + (to.z - from.z) * t
+      }, radius)) return false;
+    }
+    return true;
+  }
+
+  estimateClearance(point, maximum) {
+    if (!this.contains(point) || this.isOccupied(point)) return 0;
+    for (let radius = this.resolution; radius <= maximum; radius += this.resolution) {
+      for (let index = 0; index < 24; index += 1) {
+        const phi = Math.acos(1 - 2 * (index + 0.5) / 24);
+        const theta = Math.PI * (1 + Math.sqrt(5)) * index;
+        const sample = {
+          x: point.x + radius * Math.sin(phi) * Math.cos(theta),
+          y: point.y + radius * Math.sin(phi) * Math.sin(theta),
+          z: point.z + radius * Math.cos(phi)
+        };
+        if (!this.contains(sample) || this.isOccupied(sample)) return radius;
+      }
+    }
+    return maximum;
   }
 
   /** First free-to-occupied hit. Normal calculation is intentionally deferred. */
@@ -132,14 +250,18 @@ export class VoxelWorld {
 }
 
 export class VoxelWorldRepository {
-  constructor(maximumBytes = 512 * 1024 ** 2) {
+  constructor(maximumBytes = 512 * 1024 ** 2, worldOptions = {}) {
     this.maximumBytes = maximumBytes;
+    this.worldOptions = worldOptions;
     this.cache = new Map();
     this.inFlight = new Map();
+    this.datasetEpoch = new Map();
     this.bytes = 0;
   }
 
   async get(key, jsonPath) {
+    const datasetId = key.split(':', 1)[0];
+    const epoch = this.datasetEpoch.get(datasetId) ?? 0;
     const existing = this.cache.get(key);
     if (existing) {
       this.cache.delete(key);
@@ -148,7 +270,8 @@ export class VoxelWorldRepository {
     }
     const pending = this.inFlight.get(key);
     if (pending) return pending;
-    const load = VoxelWorld.load(jsonPath).then((world) => {
+    const load = VoxelWorld.load(jsonPath, this.worldOptions).then((world) => {
+      if ((this.datasetEpoch.get(datasetId) ?? 0) !== epoch) return world;
       this.cache.set(key, world);
       this.bytes += world.byteLength;
       this.trim();
@@ -163,6 +286,7 @@ export class VoxelWorldRepository {
   }
 
   invalidateDataset(datasetId) {
+    this.datasetEpoch.set(datasetId, (this.datasetEpoch.get(datasetId) ?? 0) + 1);
     for (const [key, world] of this.cache) {
       if (!key.startsWith(`${datasetId}:`)) continue;
       this.cache.delete(key);

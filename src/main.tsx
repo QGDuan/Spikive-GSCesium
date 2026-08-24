@@ -11,9 +11,11 @@ import {
   type AppShellProps,
   type CardSettings,
   type Dataset,
+  type FlightMission,
   type InspectionLabel,
   type LabelMetadata,
   type LabelType,
+  type MissionInput,
   type WorkspaceTab
 } from './ui/AppShell';
 import { GsViewer } from './viewer';
@@ -36,6 +38,11 @@ interface DatasetListResponse {
   sogWorkerCount: number;
 }
 
+interface MissionSnapshot {
+  datasetId: string;
+  missions: FlightMission[];
+}
+
 const required = <T extends Element>(selector: string) => {
   const element = document.querySelector<T>(selector);
   if (!element) throw new Error(`页面缺少必要节点：${selector}`);
@@ -48,11 +55,15 @@ const root = createRoot(required<HTMLDivElement>('#ui-root'));
 const viewer = new GsViewer(canvas);
 const cardSettings = new Map<string, CardSettings>();
 const labelsByDataset = new Map<string, LabelSnapshot>();
+const missionsByDataset = new Map<string, FlightMission[]>();
+const missionVisualRevisionByDataset = new Map<string, string>();
 
 let datasets: Dataset[] = [];
 let selectedDatasetId = '';
 let loadedRevision = '';
 let selectedLabelId = '';
+let selectedMissionId = '';
+let planningMissionId = '';
 let activeTab: WorkspaceTab = 'scenes';
 let labelFilterType: LabelType | undefined;
 let labelFilterQuery = '';
@@ -116,6 +127,8 @@ const renderUi = () => {
   const selectedLabel = selectedDataset
     ? currentLabels(selectedDataset).find((label) => label.id === selectedLabelId)
     : undefined;
+  const missionLabels = selectedDataset ? currentLabels(selectedDataset) : [];
+  const missions = selectedDataset ? missionsByDataset.get(selectedDataset.id) ?? [] : [];
   root.render(<AppShell
     activeTab={activeTab}
     datasets={datasets}
@@ -129,6 +142,7 @@ const renderUi = () => {
     upload={uploadState}
     status={statusState}
     labels={labelPanelLabels}
+    missionLabels={missionLabels}
     labelTotal={labelPanelTotal}
     startLabelId={selectedDataset ? labelsByDataset.get(selectedDataset.id)?.startLabelId : undefined}
     selectedLabel={selectedLabel}
@@ -136,7 +150,14 @@ const renderUi = () => {
     labelFilterQuery={labelFilterQuery}
     picking={Boolean(pickingDatasetId)}
     pendingSelection={pendingLabelSelection}
-    onTab={(tab) => { activeTab = tab; renderUi(); }}
+    missions={missions}
+    selectedMissionId={selectedMissionId}
+    planningMissionId={planningMissionId}
+    onTab={(tab) => {
+      activeTab = tab;
+      renderUi();
+      if (tab === 'missions') runAction(refreshMissionPanel);
+    }}
     onReload={() => runAction(() => refreshDatasets())}
     onUpload={(file, lodLevels) => runAction(() => createDataset(file, lodLevels))}
     onCardSettings={(datasetId, patch) => {
@@ -170,6 +191,10 @@ const renderUi = () => {
       labelFilterQuery = query.trim();
       await refreshLabelPanel();
     })}
+    onCreateMission={(input) => runAction(() => createMission(input))}
+    onSelectMission={(missionId) => runAction(() => selectMission(missionId))}
+    onPlanMission={(missionId) => runAction(() => calculateMission(missionId))}
+    onDeleteMission={(missionId) => runAction(() => deleteMission(missionId))}
   />);
 };
 
@@ -232,6 +257,49 @@ const refreshLabelPanel = async () => {
   renderUi();
 };
 
+const fetchMissions = async (dataset: Dataset, force = false) => {
+  if (dataset.builtin || !dataset.visual) {
+    missionsByDataset.set(dataset.id, []);
+    missionVisualRevisionByDataset.set(dataset.id, dataset.activeVisualRevision ?? '');
+    return [];
+  }
+  const cached = missionsByDataset.get(dataset.id);
+  const collisionChanged = cached?.some((mission) => mission.collisionRevision &&
+    mission.collisionRevision !== dataset.activeCollisionRevision);
+  const visualChanged = missionVisualRevisionByDataset.get(dataset.id) !== (dataset.activeVisualRevision ?? '');
+  if (!force && cached && !collisionChanged && !visualChanged &&
+      cached.length === (dataset.missionCount ?? cached.length)) return cached;
+  const snapshot = await requestJson<MissionSnapshot>(`/api/datasets/${dataset.id}/missions`);
+  missionsByDataset.set(dataset.id, snapshot.missions);
+  missionVisualRevisionByDataset.set(dataset.id, dataset.activeVisualRevision ?? '');
+  if (selectedDatasetId === dataset.id && selectedMissionId &&
+      !snapshot.missions.some((mission) => mission.id === selectedMissionId)) selectedMissionId = '';
+  return snapshot.missions;
+};
+
+const syncViewerRoute = (dataset: Dataset) => {
+  if (!loadedRevision.startsWith(`${dataset.id}:`)) return;
+  const mission = (missionsByDataset.get(dataset.id) ?? []).find((item) => item.id === selectedMissionId);
+  if (!mission?.waypoints.length) {
+    viewer.setRoute([], false);
+    return;
+  }
+  const currentCollision = mission.collisionRevision === dataset.activeCollisionRevision;
+  viewer.setRoute(mission.waypoints, mission.status === 'valid' && currentCollision);
+};
+
+const refreshMissionPanel = async () => {
+  const dataset = datasets.find((item) => item.id === selectedDatasetId);
+  if (!dataset || dataset.builtin || !dataset.visual || !loadedRevision.startsWith(`${dataset.id}:`)) {
+    renderUi();
+    return;
+  }
+  await Promise.all([fetchInspectionLabels(dataset, true), fetchMissions(dataset, true)]);
+  syncViewerInspectionPoints(dataset);
+  syncViewerRoute(dataset);
+  renderUi();
+};
+
 const syncViewerInspectionPoints = (dataset: Dataset) => {
   if (!loadedRevision.startsWith(`${dataset.id}:`)) return;
   const labels = visibleLabels(dataset);
@@ -261,11 +329,14 @@ const loadDataset = async (dataset: Dataset) => {
   selectedDatasetId = dataset.id;
   if (contextChanged) {
     selectedLabelId = '';
+    selectedMissionId = '';
     labelFilterType = undefined;
     labelFilterQuery = '';
   }
   await fetchInspectionLabels(dataset);
+  await fetchMissions(dataset);
   syncViewerInspectionPoints(dataset);
+  syncViewerRoute(dataset);
   const count = dataset.visual.counts[0] ?? 0;
   setStatus(`${dataset.name} · LOD0 ${count.toLocaleString('zh-CN')} Gaussian · ${dataset.lodLevels} 层`, 'ready');
 };
@@ -277,6 +348,8 @@ const refreshDatasets = async (autoLoad = false) => {
   workerCount = response.sogWorkerCount;
   const ids = new Set(datasets.map((dataset) => dataset.id));
   for (const id of labelsByDataset.keys()) if (!ids.has(id)) labelsByDataset.delete(id);
+  for (const id of missionsByDataset.keys()) if (!ids.has(id)) missionsByDataset.delete(id);
+  for (const id of missionVisualRevisionByDataset.keys()) if (!ids.has(id)) missionVisualRevisionByDataset.delete(id);
   for (const dataset of datasets) {
     if (!cardSettings.has(dataset.id)) cardSettings.set(dataset.id, defaultCardSettings(dataset));
   }
@@ -293,7 +366,15 @@ const refreshDatasets = async (autoLoad = false) => {
     }
   }));
   const selected = datasets.find((dataset) => dataset.id === selectedDatasetId);
+  if (selected) {
+    try {
+      await fetchMissions(selected);
+    } catch (error) {
+      console.warn(`读取“${selected.name}”航线列表失败：`, error);
+    }
+  }
   if (selected) syncViewerInspectionPoints(selected);
+  if (selected) syncViewerRoute(selected);
   if (selected) await refreshLabelPanel();
   else renderUi();
   if (autoLoad && selected?.visual) await loadDataset(selected);
@@ -396,11 +477,14 @@ const handleDatasetAction = async (action: Parameters<AppShellProps['onDatasetAc
     await requestJson(`/api/datasets/${dataset.id}`, { method: 'DELETE' });
     cardSettings.delete(dataset.id);
     labelsByDataset.delete(dataset.id);
+    missionsByDataset.delete(dataset.id);
+    missionVisualRevisionByDataset.delete(dataset.id);
     if (selectedDatasetId === dataset.id) {
       cancelLabelPick();
       selectedDatasetId = '';
       loadedRevision = '';
       selectedLabelId = '';
+      selectedMissionId = '';
       displayedLabelSignature = '';
       labelPanelLabels = [];
       labelPanelTotal = 0;
@@ -495,6 +579,78 @@ const updateInspectionLabel = async (labelId: string, metadata: LabelMetadata) =
   syncViewerInspectionPoints(dataset);
   await refreshLabelPanel();
   setStatus(`${updated.title} 的标签信息已更新。`, 'ready');
+};
+
+const createMission = async (input: MissionInput) => {
+  const dataset = datasets.find((item) => item.id === selectedDatasetId);
+  if (!dataset) return;
+  const mission = await requestJson<FlightMission>(`/api/datasets/${dataset.id}/missions`, {
+    method: 'POST',
+    body: JSON.stringify(input)
+  });
+  missionsByDataset.set(dataset.id, [mission, ...(missionsByDataset.get(dataset.id) ?? [])]);
+  selectedMissionId = mission.id;
+  await fetchInspectionLabels(dataset, true);
+  displayedLabelSignature = '';
+  syncViewerInspectionPoints(dataset);
+  viewer.setRoute([], false);
+  await refreshDatasets();
+  renderUi();
+  setStatus(`${mission.name} 已建立，点击“计算航线”执行体素避障规划。`, 'ready');
+};
+
+const selectMission = async (missionId: string) => {
+  const dataset = datasets.find((item) => item.id === selectedDatasetId);
+  const mission = dataset && (missionsByDataset.get(dataset.id) ?? []).find((item) => item.id === missionId);
+  if (!dataset || !mission) return;
+  await loadDataset(dataset);
+  selectedMissionId = mission.id;
+  selectedLabelId = '';
+  viewer.setSelectedInspectionPoint(null);
+  syncViewerRoute(dataset);
+  activeTab = 'missions';
+  renderUi();
+  setStatus(`${mission.name} · ${mission.waypoints.length} 个航点 · ${mission.status === 'valid' ? '规划有效' : mission.status === 'invalid' ? '仅安全预览' : '待规划'}`, 'ready');
+};
+
+const calculateMission = async (missionId: string) => {
+  const dataset = datasets.find((item) => item.id === selectedDatasetId);
+  if (!dataset) return;
+  planningMissionId = missionId;
+  renderUi();
+  setStatus('正在使用 SVO 执行膨胀扫掠、绕障和最终逐段复检…');
+  try {
+    const mission = await requestJson<FlightMission>(`/api/missions/${missionId}/plan`, { method: 'POST' });
+    const current = missionsByDataset.get(dataset.id) ?? [];
+    missionsByDataset.set(dataset.id, current.map((item) => item.id === mission.id ? mission : item));
+    selectedMissionId = mission.id;
+    syncViewerRoute(dataset);
+    renderUi();
+    setStatus(mission.status === 'valid'
+      ? `${mission.name} 规划完成：${mission.waypoints.length} 个航点。`
+      : `${mission.name} 规划未通过：${mission.error ?? '未找到安全航线'}`, mission.status === 'valid' ? 'ready' : 'error');
+  } finally {
+    planningMissionId = '';
+    renderUi();
+  }
+};
+
+const deleteMission = async (missionId: string) => {
+  const dataset = datasets.find((item) => item.id === selectedDatasetId);
+  const mission = dataset && (missionsByDataset.get(dataset.id) ?? []).find((item) => item.id === missionId);
+  if (!dataset || !mission) return;
+  await requestJson(`/api/missions/${mission.id}`, { method: 'DELETE' });
+  missionsByDataset.set(dataset.id, (missionsByDataset.get(dataset.id) ?? []).filter((item) => item.id !== mission.id));
+  if (selectedMissionId === mission.id) {
+    selectedMissionId = '';
+    viewer.setRoute([], false);
+  }
+  await fetchInspectionLabels(dataset, true);
+  displayedLabelSignature = '';
+  syncViewerInspectionPoints(dataset);
+  await refreshDatasets();
+  renderUi();
+  setStatus(`${mission.name} 已删除，相关标签引用已释放。`, 'ready');
 };
 
 const onPointerDown = (event: PointerEvent) => {

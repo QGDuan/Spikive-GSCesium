@@ -31,6 +31,12 @@ import {
   validateCollisionOptions
 } from './scripts/collision-build-lib.mjs';
 import { LabelStore, LABEL_TYPES } from './server/label-store.mjs';
+import { MissionStore } from './server/mission-store.mjs';
+import { planMission } from './server/route-planner.mjs';
+import {
+  PLY_SOURCE_TO_VOXEL_IDENTITY,
+  VoxelWorldRepository
+} from './server/voxel-world.mjs';
 
 const production = process.argv.includes('--production');
 const port = Number(process.env.SPIKIVE_PORT || 5173);
@@ -52,6 +58,10 @@ const buildRuntime = new Map();
 const collisionRuntime = new Map();
 let vite;
 let labelStore;
+let missionStore;
+const voxelRepository = new VoxelWorldRepository(2 * 1024 ** 3, {
+  coordinateTransform: PLY_SOURCE_TO_VOXEL_IDENTITY
+});
 
 const datasetDirectory = (id) => {
   if (!UUID_PATTERN.test(id)) {
@@ -146,6 +156,91 @@ const parseNormal = (value) => {
   return { x: normal.x / length, y: normal.y / length, z: normal.z / length };
 };
 
+const parseRouteNumber = (value, name, { minimum = 0, exclusiveMinimum = false, maximum = 10_000 } = {}) => {
+  const number = Number(value);
+  const belowMinimum = exclusiveMinimum ? number <= minimum : number < minimum;
+  if (!Number.isFinite(number) || belowMinimum || number > maximum) {
+    const operator = exclusiveMinimum ? '大于' : '不小于';
+    throw Object.assign(new Error(`${name}必须${operator} ${minimum} 且不超过 ${maximum}。`), { statusCode: 400 });
+  }
+  if (Math.abs(number * 10 - Math.round(number * 10)) > 1e-8) {
+    throw Object.assign(new Error(`${name}最多保留一位小数。`), { statusCode: 400 });
+  }
+  return Math.round(number * 10) / 10;
+};
+
+const parseMissionProfile = (value) => {
+  if (!value || typeof value !== 'object') {
+    throw Object.assign(new Error('缺少航线参数。'), { statusCode: 400 });
+  }
+  const profile = {
+    speed: parseRouteNumber(value.speed, '飞行速度', { exclusiveMinimum: true }),
+    inflationRadius: parseRouteNumber(value.inflationRadius, '无人机膨胀系数', { exclusiveMinimum: true }),
+    observationDistance: parseRouteNumber(value.observationDistance, '观察距离', { exclusiveMinimum: true }),
+    minimumSpacing: parseRouteNumber(value.minimumSpacing, '最小点间距'),
+    maximumSpacing: parseRouteNumber(value.maximumSpacing, '最大点间距', { exclusiveMinimum: true })
+  };
+  if (profile.maximumSpacing < profile.minimumSpacing) {
+    throw Object.assign(new Error('最大点间距不能小于最小点间距。'), { statusCode: 400 });
+  }
+  return profile;
+};
+
+const getMissionOrThrow = (id) => {
+  if (!UUID_PATTERN.test(id)) {
+    throw Object.assign(new Error('航线 ID 无效。'), { statusCode: 400 });
+  }
+  const mission = missionStore.get(id);
+  if (!mission) throw Object.assign(new Error('航线不存在。'), { statusCode: 404 });
+  return mission;
+};
+
+const validateMissionInput = (dataset, input) => {
+  if (dataset.builtin || !dataset.visual || !dataset.source?.sha256) {
+    throw Object.assign(new Error('航线只能绑定已切片的自定义场景。'), { statusCode: 409 });
+  }
+  const startLabelId = typeof input.startLabelId === 'string' ? input.startLabelId : '';
+  const labelIds = Array.isArray(input.labelIds) ? input.labelIds : [];
+  if (!UUID_PATTERN.test(startLabelId)) {
+    throw Object.assign(new Error('航线必须指定有效的起点标签。'), { statusCode: 400 });
+  }
+  if (labelIds.length === 0) {
+    throw Object.assign(new Error('航线至少需要一个巡检标签。'), { statusCode: 400 });
+  }
+  if (labelIds.some((id) => !UUID_PATTERN.test(id)) || new Set(labelIds).size !== labelIds.length) {
+    throw Object.assign(new Error('巡检标签列表包含无效或重复 ID。'), { statusCode: 400 });
+  }
+  if (labelIds.includes(startLabelId)) {
+    throw Object.assign(new Error('起点不能重复加入巡检标签序列。'), { statusCode: 400 });
+  }
+  const startLabel = labelStore.get(startLabelId);
+  if (!startLabel || startLabel.datasetId !== dataset.id || startLabel.type !== '起点') {
+    throw Object.assign(new Error('指定标签不是当前场景的起点。'), { statusCode: 400 });
+  }
+  const labels = labelIds.map((id) => labelStore.get(id));
+  if (labels.some((label) => !label || label.datasetId !== dataset.id || label.type === '起点')) {
+    throw Object.assign(new Error('巡检标签必须全部属于当前场景，且不能是起点。'), { statusCode: 400 });
+  }
+  const staleStart = !startLabel.resolved || !startLabel.normal || startLabel.visualRevision !== dataset.activeVisualRevision ||
+    startLabel.sourceSha256 !== dataset.source.sha256;
+  const stale = labels.find((label) => !label.resolved || !label.normal ||
+    label.visualRevision !== dataset.activeVisualRevision || label.sourceSha256 !== dataset.source.sha256);
+  if (staleStart) {
+    throw Object.assign(new Error(`起点“${startLabel.title}”不属于当前视觉版本，请重新选择。`), { statusCode: 409 });
+  }
+  if (stale) {
+    throw Object.assign(new Error(`标签“${stale.title}”缺少当前视觉版本的可靠位置或法向，请重新选择。`), { statusCode: 409 });
+  }
+  return {
+    name: input.name,
+    startLabelId,
+    labelIds,
+    profile: parseMissionProfile(input.profile),
+    startLabel,
+    labels
+  };
+};
+
 const emptyCollision = () => ({
   status: 'not-built',
   progress: 0,
@@ -163,11 +258,16 @@ const exposeDataset = (dataset) => {
     ...(dataset.collision || {}),
     ...(collisionRuntime.get(dataset.id) || {})
   };
+  if (collision.revision) {
+    collision.coordinateSystem = 'source-ply-local-z-up-meters';
+    collision.sourceToVoxelTransform = 'rotate-z-180';
+  }
   return {
     ...dataset,
     ...(runtime || {}),
     collision,
     labelCount: dataset.id === 'builtin' ? 0 : labelStore.count(dataset.id),
+    missionCount: dataset.id === 'builtin' ? 0 : missionStore.count(dataset.id),
     source: dataset.source
       ? { bytes: dataset.source.bytes, sha256: dataset.source.sha256 }
       : undefined
@@ -206,6 +306,7 @@ const readBuiltInDataset = async () => {
           stage: '内置场景不提供体素计算'
         },
         labelCount: 0,
+        missionCount: 0,
         createdAt: null,
         updatedAt: null,
         builtin: true
@@ -313,6 +414,7 @@ const runBuild = async (id) => {
       generator: report.meta.asset?.generator ?? '@playcanvas/splat-transform',
       workerCount: buildResult.workerCount
     };
+    missionStore.invalidateDatasetVisual(id);
     await writeDataset(current);
     await rm(workDirectory, { recursive: true, force: true });
   } catch (error) {
@@ -393,7 +495,8 @@ const runCollisionBuild = async (id, options) => {
       voxelOpacity: options.voxelOpacity,
       sourceSha256: dataset.source.sha256,
       sourceVisualRevision: dataset.activeVisualRevision,
-      coordinateSystem: 'local-z-up-meters',
+      coordinateSystem: 'source-ply-local-z-up-meters',
+      sourceToVoxelTransform: 'rotate-z-180',
       generator: report.metadata.asset?.generator ?? '@playcanvas/splat-transform',
       execution: 'WebGPU parallel',
       bytes: report.bytes,
@@ -409,7 +512,9 @@ const runCollisionBuild = async (id, options) => {
       debugMeshMode: 'faces',
       createdAt: new Date().toISOString()
     };
+    missionStore.invalidateDatasetCollision(id, revision);
     await writeDataset(current);
+    voxelRepository.invalidateDataset(id);
     await rm(workDirectory, { recursive: true, force: true });
   } catch (error) {
     const current = await readDataset(id);
@@ -718,6 +823,84 @@ const handleApi = async (request, response, url) => {
     return true;
   }
 
+  const missionsMatch = /^\/api\/datasets\/([^/]+)\/missions$/.exec(url.pathname);
+  if (missionsMatch) {
+    const dataset = await readDataset(missionsMatch[1]);
+    if (request.method === 'GET') {
+      sendJson(response, 200, { datasetId: dataset.id, missions: missionStore.list(dataset.id) });
+      return true;
+    }
+    if (request.method === 'POST') {
+      const body = await readJsonBody(request);
+      const input = validateMissionInput(dataset, body);
+      const mission = missionStore.create({ id: randomUUID(), datasetId: dataset.id, ...input });
+      sendJson(response, 201, mission);
+      return true;
+    }
+  }
+
+  const missionPlanMatch = /^\/api\/missions\/([^/]+)\/plan$/.exec(url.pathname);
+  if (request.method === 'POST' && missionPlanMatch) {
+    const mission = getMissionOrThrow(missionPlanMatch[1]);
+    const dataset = await readDataset(mission.datasetId);
+    if (!dataset.activeCollisionRevision || dataset.collision?.status !== 'ready' ||
+        dataset.collision.revision !== dataset.activeCollisionRevision) {
+      throw Object.assign(new Error('当前场景尚无可用体素，请先完成体素计算。'), { statusCode: 409 });
+    }
+    if (dataset.collision.sourceSha256 !== dataset.source?.sha256) {
+      throw Object.assign(new Error('体素数据与当前源 PLY 不一致，请重新计算体素。'), { statusCode: 409 });
+    }
+    const input = validateMissionInput(dataset, mission);
+    const jsonPath = resolve(
+      datasetDirectory(dataset.id), 'collision-revisions', dataset.activeCollisionRevision, 'scene.voxel.json'
+    );
+    const collision = await voxelRepository.get(`${dataset.id}:${dataset.activeCollisionRevision}`, jsonPath);
+    const currentDataset = await readDataset(dataset.id);
+    const currentMission = missionStore.get(mission.id);
+    if (!currentMission || currentMission.updatedAt !== mission.updatedAt ||
+        currentDataset.activeCollisionRevision !== dataset.activeCollisionRevision) {
+      throw Object.assign(new Error('航线或体素版本在计算准备期间已变化，请重新规划。'), { statusCode: 409 });
+    }
+    const result = planMission({
+      startLabel: input.startLabel,
+      labels: input.labels,
+      profile: input.profile,
+      collision
+    });
+    const saved = missionStore.savePlan(mission.id, {
+      ...result,
+      collisionRevision: dataset.activeCollisionRevision
+    });
+    sendJson(response, 200, saved);
+    return true;
+  }
+
+  const missionMatch = /^\/api\/missions\/([^/]+)$/.exec(url.pathname);
+  if (missionMatch) {
+    const mission = getMissionOrThrow(missionMatch[1]);
+    if (request.method === 'GET') {
+      sendJson(response, 200, mission);
+      return true;
+    }
+    if (request.method === 'PATCH') {
+      const dataset = await readDataset(mission.datasetId);
+      const body = await readJsonBody(request);
+      const merged = {
+        name: body.name ?? mission.name,
+        startLabelId: body.startLabelId ?? mission.startLabelId,
+        labelIds: body.labelIds ?? mission.labelIds,
+        profile: body.profile ? { ...mission.profile, ...body.profile } : mission.profile
+      };
+      const input = validateMissionInput(dataset, merged);
+      sendJson(response, 200, missionStore.update(mission.id, input));
+      return true;
+    }
+    if (request.method === 'DELETE') {
+      sendJson(response, 200, { deleted: true, mission: missionStore.delete(mission.id) });
+      return true;
+    }
+  }
+
   const labelsMatch = /^\/api\/datasets\/([^/]+)\/labels$/.exec(url.pathname);
   if (request.method === 'GET' && labelsMatch) {
     const dataset = await readDataset(labelsMatch[1]);
@@ -876,7 +1059,9 @@ const handleApi = async (request, response, url) => {
     if (activeBuildId === id || activeCollisionId === id) {
       throw Object.assign(new Error('该数据正在执行重任务，完成后才能删除。'), { statusCode: 409 });
     }
+    missionStore.deleteDataset(id);
     labelStore.deleteDataset(id);
+    voxelRepository.invalidateDataset(id);
     await rm(datasetDirectory(id), { recursive: true, force: true });
     sendJson(response, 200, { deleted: true, id });
     return true;
@@ -993,6 +1178,7 @@ const migrateLegacyLabels = async () => {
 await mkdir(resolve(projectRoot, 'var'), { recursive: true });
 await mkdir(datasetsRoot, { recursive: true });
 labelStore = new LabelStore(labelDatabasePath);
+missionStore = new MissionStore(labelStore.database);
 await migrateLegacyLabels();
 await recoverInterruptedBuilds();
 

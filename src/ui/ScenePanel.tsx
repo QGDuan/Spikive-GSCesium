@@ -44,7 +44,7 @@ const SceneCard = ({ dataset, selected, loaded, busy, settings, gaussianVisible,
     <div className="status-row"><StatusMark state={visual.state}>{visual.label}</StatusMark><StatusMark state={collision.state}>{collision.label}</StatusMark></div>
     <div className="scene-card__meta">
       {dataset.visual
-        ? <><span>{dataset.lodLevels} LOD</span><span>{dataset.visual.counts[0]?.toLocaleString('zh-CN') ?? '—'} GS</span><span>{formatBytes(dataset.visual.bytes)}</span><span>{dataset.labelCount ?? 0} 标签</span></>
+        ? <><span>{dataset.lodLevels} LOD</span><span>{dataset.visual.counts[0]?.toLocaleString('zh-CN') ?? '—'} GS</span><span>{formatBytes(dataset.visual.bytes)}</span><span>{dataset.labelCount ?? 0} 标签</span><span>{dataset.missionCount ?? 0} 航线</span></>
         : <span>等待首次切片</span>}
     </div>
     <p className={`scene-card__stage${dataset.error || dataset.collision.error ? ' is-error' : ''}`}>

@@ -52,11 +52,19 @@ splat-transform --memory source.ply \
 Application root
 └─ scene-root   共享 local Z-up 到 PlayCanvas Y-up 变换与居中
    ├─ gs-entity             高斯开关只控制该节点
-   ├─ voxel-debug-entity    青色半透明、不可拾取
+   ├─ voxel-source-frame    体素 identity → 源 PLY 的 Rz(180°) 适配
+   │  └─ voxel-debug-entity 青色半透明、不可拾取
    └─ inspection-overlays   标签 Mesh、法向线和文字
 ```
 
-SOG、GLB 和标签都保存同一个 local Z-up 米制坐标。只在 `scene-root` 统一应用 `render=(x,z,-y)` 和场景居中，避免每类对象各自转换导致偏移。
+持久化标签和航线使用源 PLY 的 local Z-up 米制坐标。官方工具内部把 PLY 定义为绕 Z 轴 180° 的格式坐标，SOG 保持 PLY 空间，而 voxel/GLB 输出烘焙为 identity 空间。因此碰撞存储边界固定采用自逆变换：
+
+```text
+voxel = (-source.x, -source.y, source.z)
+source = (-voxel.x, -voxel.y, voxel.z)
+```
+
+SVO 的点、球、航段和射线查询均在入口执行该变换；半径和距离不变。GLB 放在独立 `voxel-source-frame` 下执行同样的 `Rz(180°)` 后，再与 GS、标签共同经过 `scene-root` 的 `render=(x,z,-y)` 和场景居中。业务层不得直接使用 voxel identity 坐标。
 
 体素 MeshInstance 固定 `pick=false`，开启深度测试但不写入深度，用于与 GS 叠加查看覆盖边界，不能拦截巡检点点击。
 
@@ -76,6 +84,7 @@ GLB 默认不请求。用户勾选后才从版本化 URL 加载，服务支持 H
 ## 6. 数据依赖闭环
 
 - collision manifest 记录源 PLY 摘要、参数、坐标系、统计、调试网格模式和全部校验值；
+- 新 manifest 明确记录 `sourceToVoxelTransform=rotate-z-180`；旧活动版本由同一固定运行时适配读取，无需重算体素；
 - API 只公布活动 collision revision 的版本化 `debugMeshUrl`、字节数和模式；
 - 体素重算不修改视觉 revision、标签坐标或航线数据；
 - 永久删除数据集时，GLB 与同版本 SVO 一起按数据集所有权清理；
@@ -86,6 +95,7 @@ GLB 默认不请求。用户勾选后才从版本化 URL 加载，服务支持 H
 - 新 collision revision 必须同时包含有效 SVO 和 GLB，缺任何一项都不得激活；
 - 应用初始状态为“显示高斯”已勾选、“显示体素”未勾选；
 - 四种显示组合都不改变 local 坐标、标签、SVO 或航线状态；
+- 视觉树范围与体素范围按 `Rz(180°)` 变换后必须一致，固定空间锚点的 SVO 占用与 GLB 覆盖必须和 GS 重合；
 - 体素网格不能被点击，不能遮挡标签 Picker，不能成为路线规划输入；
 - 重复勾选、取消、切换场景和清除显示后，Asset、Entity、请求和 GPU 资源不持续增长；
 - 大网格必须实机验证加载时间、内存、显存和交互帧率。

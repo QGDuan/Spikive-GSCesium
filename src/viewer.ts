@@ -58,7 +58,12 @@ interface LoadedScene {
   url: string;
   markerSize: number;
   markers: InspectionMarker[];
+  route?: RouteOverlay;
   voxelDebug?: VoxelDebugOverlay;
+}
+
+interface RouteOverlay {
+  root: Entity;
 }
 
 interface VoxelDebugOverlay {
@@ -80,6 +85,12 @@ export interface InspectionPoint {
   title?: string;
   position: { x: number; y: number; z: number };
   normal: { x: number; y: number; z: number } | null;
+}
+
+export interface RouteWaypoint {
+  id: string;
+  type: 'start' | 'inspection' | 'transit';
+  position: { x: number; y: number; z: number };
 }
 
 export interface LocalRay {
@@ -127,6 +138,9 @@ export class GsViewer {
   private inspectionMaterial?: StandardMaterial;
   private inspectionSelectedMaterial?: StandardMaterial;
   private inspectionNormalMaterial?: StandardMaterial;
+  private routeValidMaterial?: StandardMaterial;
+  private routeInvalidMaterial?: StandardMaterial;
+  private routeTransitMaterial?: StandardMaterial;
   private voxelDebugMaterial?: StandardMaterial;
   private current?: LoadedScene;
   private selectedInspectionPointId = '';
@@ -201,6 +215,9 @@ export class GsViewer {
     this.inspectionMaterial = this.createInspectionMaterial('inspection-point-red', new Color(1, 0.025, 0.015));
     this.inspectionSelectedMaterial = this.createInspectionMaterial('inspection-point-selected', new Color(0.02, 0.34, 1));
     this.inspectionNormalMaterial = this.createInspectionMaterial('inspection-normal-orange', new Color(1, 0.32, 0.025));
+    this.routeValidMaterial = this.createInspectionMaterial('route-valid-green', new Color(0.08, 0.85, 0.28));
+    this.routeInvalidMaterial = this.createInspectionMaterial('route-invalid-orange', new Color(1, 0.32, 0.025));
+    this.routeTransitMaterial = this.createInspectionMaterial('route-transit-blue', new Color(0.03, 0.34, 1));
     this.voxelDebugMaterial = this.createVoxelDebugMaterial();
 
     this.camera = new Entity('camera');
@@ -361,6 +378,7 @@ export class GsViewer {
     const sceneGeneration = this.generation;
     const asset = new Asset(`${name}-voxel-debug`, 'container', { url });
     let entity: Entity | undefined;
+    let voxelFrame: Entity | undefined;
     this.activeLoads += 1;
     try {
       await loadAsset(asset, app);
@@ -394,14 +412,20 @@ export class GsViewer {
         throw new Error('体素调试网格为空。');
       }
 
-      // Collision GLB and SOG use the same local Z-up source coordinates. Parenting the
-      // overlay here applies exactly the same Z-up→PlayCanvas mapping and scene centering.
-      scene.root.addChild(entity);
-      scene.voxelDebug = { asset, entity, url };
+      // splat-transform bakes voxel/GLB output from PLY space into its identity
+      // frame (Rz(180°)). Keep persisted annotations in source PLY coordinates
+      // and adapt only this collision-storage boundary.
+      voxelFrame = new Entity(`voxel-source-frame-${name}`);
+      voxelFrame.setLocalEulerAngles(0, 0, 180);
+      voxelFrame.addChild(entity);
+      scene.root.addChild(voxelFrame);
+      scene.voxelDebug = { asset, entity: voxelFrame, url };
+      voxelFrame = undefined;
       entity = undefined;
       return true;
     } catch (error) {
-      entity?.destroy();
+      if (voxelFrame) voxelFrame.destroy();
+      else entity?.destroy();
       asset.unload();
       app.assets.remove(asset);
       throw error;
@@ -580,6 +604,52 @@ export class GsViewer {
     }
   }
 
+  setRoute(waypoints: RouteWaypoint[], valid: boolean) {
+    const current = this.current;
+    const lineMaterial = valid ? this.routeValidMaterial : this.routeInvalidMaterial;
+    const redMaterial = this.inspectionMaterial;
+    const blueMaterial = this.routeTransitMaterial;
+    if (!current || !lineMaterial || !redMaterial || !blueMaterial) return;
+    this.clearRouteForScene(current);
+    if (waypoints.length === 0) return;
+    const root = new Entity('flight-route');
+    current.root.addChild(root);
+    const pointScale = Math.max(0.08, current.markerSize * 0.28);
+    const lineDiameter = Math.max(0.025, current.markerSize * 0.045);
+    for (let index = 0; index < waypoints.length; index += 1) {
+      const point = waypoints[index];
+      const node = new Entity(`route-point:${point.id}`);
+      node.addComponent('render', {
+        type: 'sphere',
+        material: point.type === 'transit' ? blueMaterial : redMaterial
+      });
+      node.setLocalPosition(point.position.x, point.position.y, point.position.z);
+      node.setLocalScale(pointScale, pointScale, pointScale);
+      root.addChild(node);
+      const next = waypoints[index + 1];
+      if (!next) continue;
+      const direction = new Vec3(
+        next.position.x - point.position.x,
+        next.position.y - point.position.y,
+        next.position.z - point.position.z
+      );
+      const length = direction.length();
+      if (length < 1e-6) continue;
+      direction.mulScalar(1 / length);
+      const segment = new Entity(`route-segment:${index}`);
+      segment.addComponent('render', { type: 'cylinder', material: lineMaterial });
+      segment.setLocalPosition(
+        (point.position.x + next.position.x) * 0.5,
+        (point.position.y + next.position.y) * 0.5,
+        (point.position.z + next.position.z) * 0.5
+      );
+      segment.setLocalRotation(new Quat().setFromDirections(LOCAL_UP, direction));
+      segment.setLocalScale(lineDiameter, length, lineDiameter);
+      root.addChild(segment);
+    }
+    current.route = { root };
+  }
+
   async pickInspectionPoint(clientX: number, clientY: number) {
     const app = this.app;
     const camera = this.camera?.camera;
@@ -597,7 +667,13 @@ export class GsViewer {
       const width = Math.max(1, Math.round(rect.width));
       const height = Math.max(1, Math.round(rect.height));
       picker.resize(width, height);
-      picker.prepare(camera, app.scene);
+      const routeEnabled = current.route?.root.enabled;
+      if (current.route) current.route.root.enabled = false;
+      try {
+        picker.prepare(camera, app.scene);
+      } finally {
+        if (current.route) current.route.root.enabled = routeEnabled ?? true;
+      }
       const radius = 4;
       const selection = await picker.getSelectionAsync(x - radius, y - radius, radius * 2 + 1, radius * 2 + 1);
       if (this.disposed || generation !== this.generation) return null;
@@ -641,11 +717,13 @@ export class GsViewer {
         normalLine: marker.normalLine?.enabled,
         textScreen: marker.textScreen.enabled
       }));
+      const routeEnabled = current.route?.root.enabled;
       for (const { marker } of markerStates) {
         marker.mesh.enabled = false;
         if (marker.normalLine) marker.normalLine.enabled = false;
         marker.textScreen.enabled = false;
       }
+      if (current.route) current.route.root.enabled = false;
       try {
         picker.prepare(camera, app.scene);
       } finally {
@@ -654,6 +732,7 @@ export class GsViewer {
           if (state.marker.normalLine) state.marker.normalLine.enabled = state.normalLine ?? false;
           state.marker.textScreen.enabled = state.textScreen;
         }
+        if (current.route) current.route.root.enabled = routeEnabled ?? true;
       }
       const [selection, centerWorld] = await Promise.all([
         picker.getSelectionAsync(pickX, pickY, 1, 1),
@@ -696,6 +775,7 @@ export class GsViewer {
     }
     this.clearVoxelDebugForScene(this.current);
     this.clearInspectionMarkers(this.current);
+    this.clearRouteForScene(this.current);
     this.current.root.destroy();
     this.current.asset.unload();
     this.app.assets.remove(this.current.asset);
@@ -713,6 +793,7 @@ export class GsViewer {
     if (this.current && this.app) {
       this.clearVoxelDebugForScene(this.current);
       this.clearInspectionMarkers(this.current);
+      this.clearRouteForScene(this.current);
       this.current.root.destroy();
       this.current.asset.unload();
       this.app.assets.remove(this.current.asset);
@@ -740,6 +821,12 @@ export class GsViewer {
     this.inspectionSelectedMaterial = undefined;
     this.inspectionNormalMaterial?.destroy();
     this.inspectionNormalMaterial = undefined;
+    this.routeValidMaterial?.destroy();
+    this.routeValidMaterial = undefined;
+    this.routeInvalidMaterial?.destroy();
+    this.routeInvalidMaterial = undefined;
+    this.routeTransitMaterial?.destroy();
+    this.routeTransitMaterial = undefined;
     this.voxelDebugMaterial?.destroy();
     this.voxelDebugMaterial = undefined;
     this.app?.destroy();
@@ -758,6 +845,11 @@ export class GsViewer {
       marker.mesh.destroy();
     }
     scene.markers = [];
+  }
+
+  private clearRouteForScene(scene: LoadedScene) {
+    scene.route?.root.destroy();
+    scene.route = undefined;
   }
 
   private clearVoxelDebugForScene(scene: LoadedScene) {

@@ -1,4 +1,4 @@
-export type WorkspaceTab = 'scenes' | 'labels';
+export type WorkspaceTab = 'scenes' | 'labels' | 'missions';
 export type LabelType = '起点' | '缺陷点' | '常态化巡检点' | '关键巡检点' | '一般巡检点';
 export const LABEL_TYPES: LabelType[] = ['起点', '缺陷点', '常态化巡检点', '关键巡检点', '一般巡检点'];
 
@@ -10,6 +10,8 @@ export interface CollisionState {
   revision?: string | null;
   voxelSize: number;
   voxelOpacity: number;
+  coordinateSystem?: 'source-ply-local-z-up-meters';
+  sourceToVoxelTransform?: 'rotate-z-180';
   bytes?: number;
   debugMeshUrl?: string;
   debugMeshBytes?: number;
@@ -35,9 +37,54 @@ export interface Dataset {
     workerCount?: number;
   } | null;
   activeVisualRevision?: string | null;
+  activeCollisionRevision?: string | null;
   collision: CollisionState;
   labelCount?: number;
+  missionCount?: number;
   builtin?: boolean;
+}
+
+export interface FlightProfile {
+  speed: number;
+  inflationRadius: number;
+  observationDistance: number;
+  minimumSpacing: number;
+  maximumSpacing: number;
+}
+
+export interface FlightWaypoint {
+  id: string;
+  sequence: number;
+  type: 'start' | 'inspection' | 'transit';
+  position: { x: number; y: number; z: number };
+  yaw: number;
+  pitch: number;
+  speed: number;
+  targetLabelId: string | null;
+  clearance: number;
+  valid: boolean;
+}
+
+export interface FlightMission {
+  id: string;
+  datasetId: string;
+  name: string;
+  startLabelId: string;
+  labelIds: string[];
+  profile: FlightProfile;
+  collisionRevision: string | null;
+  status: 'draft' | 'valid' | 'invalid';
+  error: string | null;
+  waypoints: FlightWaypoint[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MissionInput {
+  name: string;
+  startLabelId: string;
+  labelIds: string[];
+  profile: FlightProfile;
 }
 
 export interface InspectionLabel {
@@ -97,6 +144,7 @@ export interface AppShellProps {
   upload: { progress: number; stage: string; busy: boolean };
   status: { message: string; state: 'loading' | 'ready' | 'error' };
   labels: InspectionLabel[];
+  missionLabels: InspectionLabel[];
   labelTotal: number;
   startLabelId?: string | null;
   selectedLabel?: InspectionLabel;
@@ -104,6 +152,9 @@ export interface AppShellProps {
   labelFilterQuery: string;
   picking: boolean;
   pendingSelection?: PendingSelection;
+  missions: FlightMission[];
+  selectedMissionId?: string;
+  planningMissionId?: string;
   onTab(tab: WorkspaceTab): void;
   onReload(): void;
   onUpload(file: File, lodLevels: number): void;
@@ -118,4 +169,8 @@ export interface AppShellProps {
   onDeleteLabel(labelId: string): void;
   onSelectLabel(labelId: string): void;
   onLabelFilter(type: LabelType | undefined, query: string): void;
+  onCreateMission(input: MissionInput): void;
+  onSelectMission(missionId: string): void;
+  onPlanMission(missionId: string): void;
+  onDeleteMission(missionId: string): void;
 }

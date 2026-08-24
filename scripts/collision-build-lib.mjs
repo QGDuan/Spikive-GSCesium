@@ -196,7 +196,8 @@ export const buildOfficialCollision = async ({
   const manifest = {
     schemaVersion: 1,
     strategy: 'official-sparse-voxel-octree-v1',
-    coordinateSystem: 'local-z-up-meters',
+    coordinateSystem: 'source-ply-local-z-up-meters',
+    sourceToVoxelTransform: 'rotate-z-180',
     collisionMeshGenerated: true,
     collisionMeshMode: 'faces',
     collisionMeshFile: report.collisionMesh.file,

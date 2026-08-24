@@ -14,6 +14,7 @@ src/ui/theme.css           唯一设计令牌：颜色、字体、间距、圆�
 src/ui/primitives.tsx      通用原语：Button、UiContainer、Icon、StatusMark、SectionHeading、EmptyState
 src/ui/ScenePanel.tsx      场景导入、切片、体素和场景卡片
 src/ui/LabelPanel.tsx      标签列表、筛选、详情与编辑卡片
+src/ui/MissionPanel.tsx    场景绑定的航线创建、参数、规划与删除
 src/ui/PerformanceCard.tsx 只读性能卡片
 src/ui/AppShell.tsx        只负责导航与区域组合
 src/styles.css             原语样式、业务排版与响应式布局，不定义新的主题值
@@ -71,9 +72,10 @@ src/styles.css             原语样式、业务排版与响应式布局，不�
 
 ## 7. 页面和业务组织
 
-- 主导航内部标识固定为 `scenes | labels`，界面统一称“场景”，不再混用“数据”作为页面名称；
+- 主导航内部标识固定为 `scenes | labels | missions`，界面统一称“场景”“标签”“航线”，不再混用“数据”作为页面名称；
 - 场景卡片只管理源 PLY、视觉切片、体素、显示状态和永久删除；
 - 标签页只读绑定当前成功加载的场景，不能在标签页切换所属场景；
+- 航线页同样只读绑定当前场景；起点、顺序标签、参数、规划和删除在独立页面管理，不塞回场景卡片；
 - 标签创建、列表与文本/类型筛选在左侧；草稿、选中详情和编辑在右上独立巡检点卡片；
 - 性能卡片固定在右下，只显示 FPS、可见 GS、系统 CPU、系统内存和 GPU 资源估算；WebGPU/WebGL2 位于顶部；
 - 后端空间查询能力保留，但界面不显示“查询选中点周边”；
@@ -108,4 +110,4 @@ src/styles.css             原语样式、业务排版与响应式布局，不�
 
 本次重构前存在以下问题：颜色、字体、圆角和容器外观散落在单一 CSS；场景、标签、性能和应用壳集中在一个大组件；同类按钮与空状态重复实现；可见名称已改为“场景”但内部仍使用 `data` 和 `dataset-card`。
 
-现已统一为主题令牌、基础原语、独立业务组件与轻量 AppShell；内部页签改为 `scenes`，场景卡片类名统一为 `scene-card`。现有上传、切片、体素、显示、标签 CRUD/筛选/编辑、性能监控和删除业务回调保持不变。
+现已统一为主题令牌、基础原语、独立业务组件与轻量 AppShell；内部页签为 `scenes | labels | missions`，场景卡片类名统一为 `scene-card`。上传、切片、体素、显示、标签 CRUD/筛选/编辑、航线规划、性能监控和删除业务各自保持独立。
