@@ -1,0 +1,80 @@
+:root {
+  color-scheme: dark;
+
+  --ui-font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --ui-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --ui-color-canvas: #0b0b0b;
+  --ui-color-chrome: rgb(18 18 18 / 96%);
+  --ui-color-panel: rgb(24 24 24 / 96%);
+  --ui-color-floating: rgb(24 24 24 / 94%);
+  --ui-color-card: #1c1c1c;
+  --ui-color-card-hover: #202020;
+  --ui-color-control: #141414;
+  --ui-color-control-hover: #242424;
+  --ui-color-control-active: #2c2c2c;
+  --ui-color-grid: #2b2b2b;
+  --ui-color-border: #343434;
+  --ui-color-border-muted: #292929;
+  --ui-color-border-strong: #3b3b3b;
+  --ui-color-border-hover: #535353;
+  --ui-color-text: #f4f4f4;
+  --ui-color-text-secondary: #aaa;
+  --ui-color-text-muted: #777;
+  --ui-color-text-faint: #666;
+  --ui-color-accent: #f60;
+  --ui-color-accent-hover: #ff812d;
+  --ui-color-accent-soft: #ffaf50;
+  --ui-color-accent-tint: rgb(255 102 0 / 10%);
+  --ui-color-accent-border: #59351e;
+  --ui-color-danger: #ff6a33;
+  --ui-color-danger-text: #ff9a68;
+  --ui-color-danger-bg: #3b2116;
+  --ui-color-danger-border: #8a431c;
+  --ui-color-black: #000;
+
+  --ui-font-size-caption: 9px;
+  --ui-font-size-helper: 10px;
+  --ui-font-size-label: 11px;
+  --ui-font-size-body: 12px;
+  --ui-font-size-title: 14px;
+  --ui-font-size-heading: 18px;
+  --ui-font-weight-medium: 500;
+  --ui-font-weight-semibold: 600;
+  --ui-font-weight-heading: 650;
+  --ui-font-weight-bold: 700;
+  --ui-line-compact: 1.2;
+  --ui-line-body: 1.5;
+
+  --ui-space-1: 4px;
+  --ui-space-2: 6px;
+  --ui-space-3: 8px;
+  --ui-space-4: 10px;
+  --ui-space-5: 12px;
+  --ui-space-6: 14px;
+  --ui-space-7: 16px;
+
+  --ui-radius-control: 4px;
+  --ui-radius-card: 6px;
+  --ui-radius-panel: 8px;
+  --ui-radius-round: 999px;
+  --ui-control-height: 32px;
+  --ui-control-height-compact: 28px;
+  --ui-control-height-touch: 38px;
+
+  --ui-shadow-panel: 0 18px 48px rgb(0 0 0 / 34%);
+  --ui-shadow-floating: 0 14px 36px rgb(0 0 0 / 30%);
+  --ui-shadow-navigation: 0 4px 18px rgb(0 0 0 / 22%);
+  --ui-blur-panel: blur(12px);
+
+  --ui-topbar-height: 48px;
+  --ui-panel-width: 392px;
+  --ui-inspection-width: 326px;
+  --ui-performance-width: 270px;
+  --ui-layer-status: 10;
+  --ui-layer-performance: 11;
+  --ui-layer-workspace: 12;
+  --ui-layer-inspection: 13;
+  --ui-layer-navigation: 20;
+  --ui-layer-picker: 50;
+}

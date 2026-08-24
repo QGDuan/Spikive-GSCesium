@@ -186,7 +186,7 @@ nominalViewDirection = normalize(P - preferredObservation) = -N
 
 - GPU 圆选与 PCA：`src/gaussian-circle-selector.ts`
 - PlayCanvas Picker、标签 Mesh、法向线和文字：`src/viewer.ts`
-- UI 状态、数据卡片和标签同步：`src/main.ts`
+- React UI 状态、场景卡片和标签同步：`src/main.tsx`
 - 标签 API、版本及输入校验：`server.mjs`
 
 验收至少包括：

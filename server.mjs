@@ -30,10 +30,12 @@ import {
   DEFAULT_VOXEL_SIZE,
   validateCollisionOptions
 } from './scripts/collision-build-lib.mjs';
+import { LabelStore, LABEL_TYPES } from './server/label-store.mjs';
 
 const production = process.argv.includes('--production');
 const port = Number(process.env.SPIKIVE_PORT || 5173);
 const datasetsRoot = resolve(projectRoot, 'var/local-datasets');
+const labelDatabasePath = resolve(projectRoot, 'var/labels.sqlite');
 const publicRoot = resolve(projectRoot, 'public');
 const distRoot = resolve(projectRoot, 'dist');
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -45,8 +47,8 @@ let activeCollisionId;
 let activeChild;
 const buildRuntime = new Map();
 const collisionRuntime = new Map();
-const labelMutationLocks = new Map();
 let vite;
+let labelStore;
 
 const datasetDirectory = (id) => {
   if (!UUID_PATTERN.test(id)) {
@@ -117,32 +119,6 @@ const readLabels = async (id) => {
   }
 };
 
-const writeLabels = async (id, labels) => {
-  const path = labelsPath(id);
-  const temporary = resolve(datasetDirectory(id), `labels.${randomUUID()}.tmp`);
-  await writeFile(temporary, `${JSON.stringify({ schemaVersion: 1, labels }, null, 2)}\n`, { flag: 'wx' });
-  await rename(temporary, path);
-};
-
-const mutateLabels = async (id, mutation) => {
-  const previous = labelMutationLocks.get(id) ?? Promise.resolve();
-  const current = previous.catch(() => undefined).then(async () => {
-    const labels = await readLabels(id);
-    const result = await mutation(labels);
-    await writeLabels(id, labels);
-    const dataset = await readDataset(id);
-    dataset.labelCount = labels.length;
-    await writeDataset(dataset);
-    return result;
-  });
-  labelMutationLocks.set(id, current);
-  try {
-    return await current;
-  } finally {
-    if (labelMutationLocks.get(id) === current) labelMutationLocks.delete(id);
-  }
-};
-
 const parseVector = (value, name) => {
   if (!value || !['x', 'y', 'z'].every((axis) => Number.isFinite(value[axis]))) {
     throw Object.assign(new Error(`${name}必须是有限的三维坐标。`), { statusCode: 400 });
@@ -188,7 +164,7 @@ const exposeDataset = (dataset) => {
     ...dataset,
     ...(runtime || {}),
     collision,
-    labelCount: dataset.labelCount ?? 0,
+    labelCount: dataset.id === 'builtin' ? 0 : labelStore.count(dataset.id),
     source: dataset.source
       ? { bytes: dataset.source.bytes, sha256: dataset.source.sha256 }
       : undefined
@@ -742,12 +718,44 @@ const handleApi = async (request, response, url) => {
   const labelsMatch = /^\/api\/datasets\/([^/]+)\/labels$/.exec(url.pathname);
   if (request.method === 'GET' && labelsMatch) {
     const dataset = await readDataset(labelsMatch[1]);
-    const labels = await readLabels(dataset.id);
+    const type = url.searchParams.get('type') || undefined;
+    const query = url.searchParams.get('q') || '';
+    const limit = Number(url.searchParams.get('limit') || 200);
+    const offset = Number(url.searchParams.get('offset') || 0);
+    const result = labelStore.list(dataset.id, { type, query, limit, offset });
     sendJson(response, 200, {
       datasetId: dataset.id,
       sourceSha256: dataset.source?.sha256 ?? null,
       visualRevision: dataset.activeVisualRevision ?? null,
       selectionDefaults: { selectionRadiusPixels: FIXED_SELECTION_RADIUS_PIXELS },
+      labelTypes: LABEL_TYPES,
+      ...result
+    });
+    return true;
+  }
+
+  const labelSpatialMatch = /^\/api\/datasets\/([^/]+)\/labels\/spatial$/.exec(url.pathname);
+  if (request.method === 'GET' && labelSpatialMatch) {
+    const dataset = await readDataset(labelSpatialMatch[1]);
+    if (!['x', 'y', 'z', 'radius'].every((name) => url.searchParams.has(name))) {
+      throw Object.assign(new Error('空间查询缺少 x、y、z 或 radius。'), { statusCode: 400 });
+    }
+    const labels = labelStore.spatial(dataset.id, {
+      x: Number(url.searchParams.get('x')),
+      y: Number(url.searchParams.get('y')),
+      z: Number(url.searchParams.get('z')),
+      radius: Number(url.searchParams.get('radius')),
+      type: url.searchParams.get('type') || undefined,
+      limit: Number(url.searchParams.get('limit') || 200)
+    });
+    sendJson(response, 200, {
+      datasetId: dataset.id,
+      center: {
+        x: Number(url.searchParams.get('x')),
+        y: Number(url.searchParams.get('y')),
+        z: Number(url.searchParams.get('z'))
+      },
+      radius: Number(url.searchParams.get('radius')),
       labels
     });
     return true;
@@ -792,35 +800,56 @@ const handleApi = async (request, response, url) => {
     if (!Number.isFinite(normalPlanarity) || normalPlanarity < 0 || normalPlanarity > 1) {
       throw Object.assign(new Error('PCA 平面度无效。'), { statusCode: 400 });
     }
-    const requestedTitle = typeof body.title === 'string' ? body.title.trim().slice(0, 80) : '';
-    const label = await mutateLabels(dataset.id, (labels) => {
-      let sequence = 1;
-      while (labels.some((item) => item.title === `巡检点_${sequence}`)) sequence += 1;
-      const created = {
-        id: randomUUID(),
-        datasetId: dataset.id,
-        title: requestedTitle || `巡检点_${sequence}`,
-        position,
-        normal,
-        selectionMethod: 'loaded-lod-gpu-circle-pca-v1',
-        selectionRadiusPixels,
-        neighborCount,
-        normalPlanarity,
-        normalEigenvalues: eigenvalues,
-        residentLodLevels,
-        residentFileCount,
-        pickBackend: body.pickBackend,
-        selectionDataSource: body.selectionDataSource,
-        visualRevision: dataset.activeVisualRevision,
-        sourceSha256: dataset.source.sha256,
-        resolved: true,
-        createdAt: new Date().toISOString()
-      };
-      labels.push(created);
-      return created;
+    const label = labelStore.create({
+      id: randomUUID(),
+      datasetId: dataset.id,
+      title: body.title,
+      description: body.description,
+      type: body.type,
+      position,
+      normal,
+      selectionMethod: 'loaded-lod-gpu-circle-pca-v1',
+      selectionRadiusPixels,
+      neighborCount,
+      normalPlanarity,
+      normalEigenvalues: eigenvalues,
+      residentLodLevels,
+      residentFileCount,
+      pickBackend: body.pickBackend,
+      selectionDataSource: body.selectionDataSource,
+      visualRevision: dataset.activeVisualRevision,
+      sourceSha256: dataset.source.sha256,
+      resolved: true
     });
     sendJson(response, 201, label);
     return true;
+  }
+
+  const labelMatch = /^\/api\/labels\/([^/]+)$/.exec(url.pathname);
+  if (labelMatch) {
+    const labelId = labelMatch[1];
+    if (!UUID_PATTERN.test(labelId)) {
+      throw Object.assign(new Error('巡检点 ID 无效。'), { statusCode: 400 });
+    }
+    const label = labelStore.get(labelId);
+    if (!label) {
+      throw Object.assign(new Error('巡检点不存在。'), { statusCode: 404 });
+    }
+    await readDataset(label.datasetId);
+    if (request.method === 'GET') {
+      sendJson(response, 200, label);
+      return true;
+    }
+    if (request.method === 'PATCH') {
+      const updated = labelStore.updateMetadata(labelId, await readJsonBody(request));
+      sendJson(response, 200, updated);
+      return true;
+    }
+    if (request.method === 'DELETE') {
+      const deleted = labelStore.delete(labelId);
+      sendJson(response, 200, { deleted: true, label: deleted });
+      return true;
+    }
   }
 
   const labelDeleteMatch = /^\/api\/datasets\/([^/]+)\/labels\/([^/]+)$/.exec(url.pathname);
@@ -830,11 +859,11 @@ const handleApi = async (request, response, url) => {
     if (!UUID_PATTERN.test(labelId)) {
       throw Object.assign(new Error('巡检点 ID 无效。'), { statusCode: 400 });
     }
-    const deleted = await mutateLabels(dataset.id, (labels) => {
-      const index = labels.findIndex((item) => item.id === labelId);
-      if (index < 0) throw Object.assign(new Error('巡检点不存在。'), { statusCode: 404 });
-      return labels.splice(index, 1)[0];
-    });
+    const label = labelStore.get(labelId);
+    if (!label || label.datasetId !== dataset.id) {
+      throw Object.assign(new Error('巡检点不存在。'), { statusCode: 404 });
+    }
+    const deleted = labelStore.delete(labelId);
     sendJson(response, 200, { deleted: true, label: deleted });
     return true;
   }
@@ -850,8 +879,8 @@ const handleApi = async (request, response, url) => {
     if (activeBuildId === id || activeCollisionId === id) {
       throw Object.assign(new Error('该数据正在执行重任务，完成后才能删除。'), { statusCode: 409 });
     }
+    labelStore.deleteDataset(id);
     await rm(datasetDirectory(id), { recursive: true, force: true });
-    labelMutationLocks.delete(id);
     sendJson(response, 200, { deleted: true, id });
     return true;
   }
@@ -942,7 +971,32 @@ const recoverInterruptedBuilds = async () => {
   }
 };
 
+const migrateLegacyLabels = async () => {
+  const entries = await readdir(datasetsRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !UUID_PATTERN.test(entry.name)) continue;
+    try {
+      const labels = await readLabels(entry.name);
+      const inserted = labelStore.migrateLegacy(entry.name, labels);
+      const dataset = await readDataset(entry.name);
+      const labelCount = labelStore.count(entry.name);
+      if (dataset.labelCount !== labelCount) {
+        dataset.labelCount = labelCount;
+        await writeDataset(dataset);
+      }
+      if (inserted > 0) {
+        console.log(`已迁移 ${entry.name} 的 ${inserted} 个历史标签到 SQLite。`);
+      }
+    } catch (error) {
+      console.warn(`历史标签迁移失败 ${entry.name}：`, error);
+    }
+  }
+};
+
+await mkdir(resolve(projectRoot, 'var'), { recursive: true });
 await mkdir(datasetsRoot, { recursive: true });
+labelStore = new LabelStore(labelDatabasePath);
+await migrateLegacyLabels();
 await recoverInterruptedBuilds();
 
 const server = createServer(async (request, response) => {
@@ -1015,6 +1069,7 @@ const shutdown = async () => {
   activeChild?.kill('SIGTERM');
   server.close();
   await vite?.close();
+  labelStore.close();
 };
 
 process.once('SIGINT', shutdown);

@@ -3,99 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#101214" />
+    <meta name="theme-color" content="#181818" />
     <title>Spikive GS · PlayCanvas SOG</title>
   </head>
   <body>
     <canvas id="application-canvas" aria-label="Gaussian Splatting 场景"></canvas>
     <div id="selection-circle" aria-hidden="true" hidden></div>
 
-    <aside id="data-panel" class="panel">
-      <header class="panel-header">
-        <div>
-          <span class="eyebrow">LOCAL GS PIPELINE</span>
-          <h1>数据管理</h1>
-        </div>
-        <button id="reload-datasets" class="icon-button" type="button" title="刷新数据集">↻</button>
-      </header>
-
-      <section class="upload-section" aria-label="导入 PLY">
-        <label class="file-picker" for="ply-file">
-          <input id="ply-file" type="file" accept=".ply,application/octet-stream" />
-          <span>选择 PLY</span>
-          <small id="file-name">尚未选择文件</small>
-        </label>
-
-        <div class="level-row">
-          <label for="lod-levels">切片分级</label>
-          <input id="lod-levels" type="number" min="1" max="20" step="1" value="5" inputmode="numeric" />
-        </div>
-        <p id="ratio-preview" class="ratio-preview"></p>
-        <p class="field-help">LOD0 保留完整 PLY；SOG 编码使用官方多核 worker pool。</p>
-
-        <button id="upload-button" class="wide-button primary" type="button" disabled>上传并创建数据卡片</button>
-        <progress id="build-progress" max="100" value="0"></progress>
-        <p id="build-stage" class="build-stage">选择 PLY 后开始</p>
-      </section>
-
-      <div class="card-list-header">
-        <span>数据卡片</span>
-        <small id="task-mode">重任务串行 · 内部并行</small>
-      </div>
-      <div id="dataset-cards" class="dataset-cards" aria-live="polite"></div>
-      <p class="coordinate-note">坐标：本地 Z-up 米制 · 不计算经纬度</p>
-    </aside>
-
-    <details id="performance-panel" class="panel" open>
-      <summary>
-        <span>性能监控</span>
-        <strong data-metric="backend">初始化中</strong>
-      </summary>
-      <dl class="metrics">
-        <div><dt>渲染后端</dt><dd data-metric="backend">初始化中</dd></div>
-        <div><dt>帧率</dt><dd data-metric="fps">0 FPS</dd></div>
-        <div><dt>帧时间</dt><dd data-metric="frame">0 ms</dd></div>
-        <div><dt>应用 CPU</dt><dd data-metric="app-cpu">采样中</dd></div>
-        <div><dt>系统 CPU</dt><dd data-metric="system-cpu">采样中</dd></div>
-        <div><dt>服务 CPU</dt><dd data-metric="server-cpu">采样中</dd></div>
-        <div><dt>GPU 时间</dt><dd data-metric="gpu-time">采样中</dd></div>
-        <div><dt>GPU 利用率</dt><dd>浏览器未开放</dd></div>
-        <div><dt>GPU 资源</dt><dd data-metric="engine-vram">0 B</dd></div>
-        <div><dt>物理显存</dt><dd>浏览器未开放</dd></div>
-        <div><dt>系统内存</dt><dd data-metric="system-memory">采样中</dd></div>
-        <div><dt>浏览器堆</dt><dd data-metric="browser-memory">采样中</dd></div>
-        <div><dt>服务内存</dt><dd data-metric="server-memory">采样中</dd></div>
-        <div><dt>可见 Gaussian</dt><dd data-metric="gaussians">0</dd></div>
-        <div><dt>Draw Calls</dt><dd data-metric="draw-calls">0</dd></div>
-      </dl>
-      <p class="monitor-note">GPU 资源是 PlayCanvas 跟踪的纹理/缓冲区估算，不等同于整机物理显存。</p>
-    </details>
-
-    <section id="inspection-popup" class="panel" role="dialog" aria-modal="false" aria-labelledby="inspection-popup-title" hidden>
-      <header>
-        <div>
-          <span class="eyebrow">INSPECTION POINT</span>
-          <h2 id="inspection-popup-title">巡检点</h2>
-        </div>
-        <button id="inspection-popup-close" class="icon-button" type="button" aria-label="关闭巡检点详情">×</button>
-      </header>
-      <dl>
-        <div><dt>所属场景</dt><dd data-popup="dataset">—</dd></div>
-        <div><dt>局部坐标 / m</dt><dd data-popup="position">—</dd></div>
-        <div><dt>表面法向</dt><dd data-popup="normal">—</dd></div>
-        <div><dt>圆选半径</dt><dd data-popup="radius">—</dd></div>
-        <div><dt>邻域 GS</dt><dd data-popup="neighbors">—</dd></div>
-        <div><dt>选择方法</dt><dd data-popup="method">—</dd></div>
-        <div><dt>创建时间</dt><dd data-popup="created">—</dd></div>
-      </dl>
-      <p>标签来自当前已加载 LOD 的单击式 5px GPU 圆形多选；不支持拖动，体素只用于避障。</p>
-    </section>
-
-    <div id="status" role="status" aria-live="polite">
-      <span class="status-dot"></span>
-      <span id="status-text">正在初始化 PlayCanvas…</span>
-    </div>
-    <div id="help">左键旋转 · 中键或 Shift + 左键平移 · 滚轮缩放</div>
-    <script type="module" src="/src/main.ts"></script>
+    <div id="ui-root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

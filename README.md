@@ -1,13 +1,15 @@
 # Spikive GS — PlayCanvas 本地数据管理与体素管线
 
-当前 `dev` 版本只使用一个 PlayCanvas Renderer。用户可以上传 Gaussian Splatting PLY，通过数据卡片完成首次切片、查看、体素碰撞计算/重新计算和永久删除。
+当前 `dev` 版本只使用一个 PlayCanvas Renderer。用户可以上传 Gaussian Splatting PLY，通过场景卡片完成首次切片、查看、体素碰撞计算/重新计算和永久删除。
 
 系统只保存和使用 PLY 的本地 Z-up 米制工程坐标，不计算经纬度，也不引入 Cesium、AHoLo 或第二个 GPU 上下文。
 
 详细原理文档：
 
 - 巡检点圆选、PCA 法向、空间标签与观察方向：[`docs/LABEL_SELECTION_NORMAL.md`](docs/LABEL_SELECTION_NORMAL.md)；
-- SVO 体素真值、GLB 调试网格和高斯/体素勾选开关：[`docs/VOXEL_COLLISION_DEBUG.md`](docs/VOXEL_COLLISION_DEBUG.md)。
+- SVO 体素真值、GLB 调试网格和高斯/体素勾选开关：[`docs/VOXEL_COLLISION_DEBUG.md`](docs/VOXEL_COLLISION_DEBUG.md)；
+- React 标签管理、SQLite CRUD 与业务边界：[`docs/LABEL_MANAGEMENT.md`](docs/LABEL_MANAGEMENT.md)；
+- React UI 设计系统、容器原语与后续开发规范：[`docs/UI_SYSTEM.md`](docs/UI_SYSTEM.md)。
 
 ## 1. 前置条件及环境配置
 
@@ -26,6 +28,7 @@ npm install
 
 - `playcanvas@2.21.4`
 - `@playcanvas/splat-transform@3.3.0`
+- `react@19.2.8` / `react-dom@19.2.8`
 
 ## 2. 如何启动
 
@@ -63,7 +66,7 @@ npm run dev
 
 1. 点击左上角“选择 PLY”；
 2. 选择本机 `.ply` 文件；
-3. 点击“上传并创建数据卡片”，等待进度完成。
+3. 点击“上传并创建数据”，等待场景卡片生成。
 
 上传采用流式写盘，不会把完整 PLY 读入服务端 JavaScript 内存。源文件保存在 `var/local-datasets/<数据集ID>/source.ply`，并记录 SHA-256。
 
@@ -71,7 +74,7 @@ npm run dev
 
 1. “切片分级”默认是 5，可设置 1–20 的整数；
 2. 页面会在切片前显示实际比例；
-3. 上传完成后，在对应数据卡片中点击“切片”；
+3. 上传完成后，在对应场景卡片中点击“切片”；
 4. 构建结束后，点击卡片中的“查看”。
 
 固定公式为：
@@ -92,7 +95,7 @@ LOD0 直接使用完整源 PLY，不执行抽稀。其余层串行调用官方 `
 
 ### 计算体素碰撞数据
 
-1. 只有“已切片”的数据卡片会启用“计算体素”；
+1. 只有“已切片”的场景卡片会启用“计算体素”；
 2. 体素边长默认 `0.20 m`，透明度阈值默认 `0.10`，可在卡片中手动修改；
 3. 点击“计算体素”，等待卡片显示“体素已就绪”；
 4. 已完成的数据可以点击“重新计算体素”。新版本校验通过前，上一版始终保留。
@@ -103,36 +106,36 @@ LOD0 直接使用完整源 PLY，不执行抽稀。其余层串行调用官方 `
 
 ### 调试显示体素
 
-- 数据卡片提供“显示高斯”和“显示体素”两个独立勾选按钮；载入场景时默认显示高斯、不显示体素，也可以只显示体素、同时显示或同时隐藏；
+- 场景卡片提供“显示高斯”和“显示体素”两个独立勾选按钮；载入场景时默认显示高斯、不显示体素，也可以只显示体素、同时显示或同时隐藏；
 - 勾选“显示体素”后，系统才会按需下载并显示半透明青色面网格；取消勾选会移除 Entity、卸载 Asset 并释放对应 GPU 资源；
 - 调试网格与 GS 共用当前 PlayCanvas Application、Canvas、GraphicsDevice 和场景坐标，不创建第二个 Renderer；它不可拾取，也不改变巡检点选择与碰撞查询；
 - 大场景调试网格可能达到数百 MiB，默认不加载。卡片会显示真实文件大小，达到 256 MiB 时加载前会再次确认；
 - 旧体素版本若没有 `scene.collision.glb`，点击“显示体素”会明确询问是否使用卡片中的当前参数重算；系统不会静默重算或修改体素参数。
 
-### 数据卡片管理
+### 场景卡片管理
 
 - “查看”：加载已经切片的场景；
 - “切片”：只出现在尚未切片的数据上；
-- “添加巡检点”：进入 GS 表面拾取模式，再单击场景创建红色巡检点；
 - “计算体素/重新计算体素”：只在切片成功后可用；
 - “显示高斯”/“显示体素”：勾选式独立开关，分别控制 GS 和当前体素版本的调试网格；
 - “删除”：永久删除源 PLY、视觉版本、体素版本和失败的工作目录，操作前必须确认。
 
-每个数据场景的卡片下方都有独立的“场景巡检点”列表。列表不会把不同数据集的点混在一起；点击列表项会加载所属场景、选中对应点并打开详情，点击右侧 `×` 可删除未被业务引用的点。后端拒绝删除时，前端会保留点位并显示原因。
+场景卡片只管理数据与构建状态，不再内嵌标签下拉列表。顶部“标签”是独立 React 页签，按当前已加载场景及其切片版本管理标签的初始化、编辑、删除、列表和类型查询。标签页不能切换所属场景；必须先在“场景”页查看目标场景。React 只负责业务管理界面；PlayCanvas 继续作为唯一三维 Renderer、Canvas 和 GPU 上下文。
 
-卡片分别显示切片状态、体素状态与巡检点，使“上传 → 首次切片 → 体素计算 → 打点/管理 → 重算或删除”形成闭环。
+标签类型固定为：缺陷点、常态化巡检点、关键巡检点、一般巡检点。标签被任务/航线引用时不能删除；必须先删除引用。详细数据与 API 契约见 [`docs/LABEL_MANAGEMENT.md`](docs/LABEL_MANAGEMENT.md)。
 
 ### 添加巡检点
 
 1. 数据只需完成视觉切片，不要求先计算体素；
-2. 点击数据卡片中的“添加巡检点”；
+2. 先在“场景”页查看目标场景，再打开“标签”页，点击“在当前场景新建标签”；
 3. 移动鼠标会显示固定直径 10px 的圆形光标，即固定半径 5px；
 4. 单击 GS 后，PlayCanvas Picker 先确认中心像素属于当前 GS 场景；
 5. 同一个 PlayCanvas `GraphicsDevice` 执行一次 SuperSplat centers 风格的离屏 GPU 掩码，并按当前 active placement interval 快照过滤，只保留真正正在显示的 Streamed SOG LOD Gaussian 中心；
 6. 离点击中心投影最近的 Gaussian 中心成为巡检点位置，5px 圆内全部已选中心通过 PCA 拟合表面法向；
-7. 保存后场景创建小型红色 PlayCanvas Sphere Mesh，并从球心沿持久化单位法向绘制一条 1 m 橙色方向线；世界空间 Text Element 的锚点位于法向线末端外侧 0.12 m，并始终朝向相机。点击球体、法向线或卡片列表项会选中该标签并打开详情。
+7. 圆选后在标签页填写名称、说明并选择四种类型之一，确认后才写入 SQLite；
+8. 保存后场景创建小型红色 PlayCanvas Sphere Mesh，并从球心沿持久化单位法向绘制一条 1 m 橙色方向线；世界空间 Text Element 的锚点位于法向线末端外侧 0.12 m，并始终朝向相机。点击球体或法向线会选中该标签并打开标签页详情。
 
-该交互不是可拖动的画笔，而是一次单击触发的固定 5px 圆形多选，卡片不提供调参。该流程不读取原始 PLY、不创建第二份源点索引，也不使用体素来决定标签位置或法向量；体素 SVO 只服务后续避障和航线安全计算。标签记录源摘要、活动视觉 revision、实际驻留 LOD、参与拟合的 Gaussian 数量和 PCA 统计。切换视觉 revision 后，旧标签会显示为过期，必须在新视觉版本上重新选择。
+该交互不是可拖动的画笔，而是一次单击触发的固定 5px 圆形多选，界面不提供半径调参。该流程不读取原始 PLY、不创建第二份源点索引，也不使用体素来决定标签位置或法向量；体素 SVO 只服务后续避障和航线安全计算。标签记录源摘要、活动视觉 revision、实际驻留 LOD、参与拟合的 Gaussian 数量和 PCA 统计。切换视觉 revision 后，旧标签会显示为过期，必须在新视觉版本上重新选择。
 
 巡检点 Mesh、法向线与文字使用正常深度关系，不使用始终置顶的 HTML/Sprite 标记，所以被建筑遮挡时不会穿墙显示。文字位置沿法向移到模型表面外侧，文字平面继续朝向相机以保持可读性。法向线完全由标签保存的局部 Z-up 单位法向生成，只用于表达表面朝向；观察点可优先沿法向外侧搜索，观察方向应朝回标签，并仍需通过 SVO 膨胀碰撞与视线复检。场景切换时会先停止新的拾取；正在进行的 GPU 读回完成前不会销毁选择纹理，随后再释放旧 LOD 缓存、Mesh、法向线、Text Element 与拾取映射。
 
@@ -143,32 +146,38 @@ GPU 圆形多选对每个当前驻留 Gaussian 产生一个布尔选择结果，
 - 左键拖动：旋转；
 - 中键拖动或 Shift + 左键拖动：平移；
 - 滚轮：缩放；
-- 数据卡片“查看”：切换已经完成的数据集。
+- 场景卡片“查看”：切换已经完成的场景。
 
-右上角显示实际 PlayCanvas 后端（WebGPU 或 WebGL2）、FPS、帧时间、应用/系统/服务 CPU、系统/浏览器/服务内存、可见 Gaussian、Draw Calls、GPU 时间以及 PlayCanvas 跟踪的 GPU 资源估算。
+顶部显示实际 PlayCanvas 后端（WebGPU 或 WebGL2）。右下角紧凑性能卡片只显示 FPS、可见 Gaussian、系统 CPU、系统内存和 PlayCanvas 跟踪的 GPU 资源估算。选中巡检点后，详情与编辑卡片独立显示在右上角。
 
-浏览器标准 API 不提供可靠的整机 GPU 利用率和物理显存占用，因此这两项明确显示“浏览器未开放”，不会用估算值冒充。GPU 时间也只有设备支持时间戳查询时才显示。
+管理界面采用统一的 SuperSplat 风格设计系统：顶部只保留场景/标签两个主入口，颜色、字体、间距、圆角、阴影和布局尺寸集中在 `src/ui/theme.css`，所有面板和卡片通过 `UiContainer` 变体管理。React 根节点本身不拦截视口事件，只有可见面板接收指针，因此空白三维区域仍由 PlayCanvas 相机、GS 圆选和标签 Mesh 拾取处理。窄屏会收紧面板并扩大触摸目标；键盘焦点使用橙色高可见轮廓。具体扩展规则见 [`docs/UI_SYSTEM.md`](docs/UI_SYSTEM.md)。
+
+浏览器标准 API 不提供可靠的整机 GPU 利用率和物理显存占用，因此界面只显示 PlayCanvas 可核算的 GPU 资源估算，不用估算值冒充整机显存。
 
 ## 数据组织
 
 ```text
-var/local-datasets/<dataset-id>/
-├── dataset.json
-├── labels.json
-├── source.ply
-├── visual-revisions/<revision>/
-│   ├── lod-meta.json
-│   └── <chunk>/...
-├── collision-revisions/<revision>/
-│   ├── scene.voxel.json
-│   ├── scene.voxel.bin
-│   ├── scene.collision.glb
-│   └── collision-manifest.json
-├── work/<revision>/
-└── collision-work/<revision>/
+var/
+├── labels.sqlite
+└── local-datasets/<dataset-id>/
+    ├── dataset.json
+    ├── labels.json             # 仅启动迁移读取，不再业务读写
+    ├── source.ply
+    ├── visual-revisions/<revision>/
+    │   ├── lod-meta.json
+    │   └── <chunk>/...
+    ├── collision-revisions/<revision>/
+    │   ├── scene.voxel.json
+    │   ├── scene.voxel.bin
+    │   ├── scene.collision.glb
+    │   └── collision-manifest.json
+    ├── work/<revision>/
+    └── collision-work/<revision>/
 ```
 
 - `dataset.json`：视觉与体素的独立状态、参数、摘要和活动版本；
+- `labels.sqlite`：标签 CRUD、类型/空间索引和业务引用的唯一数据库真源；
+- `labels.json`：旧版标签的幂等迁移来源，迁移不删除文件，也不会覆盖数据库中后续编辑；
 - `source.ply`：不可变的完整细节真值；
 - `visual-revisions`：构建校验通过后原子发布的 SOG；
 - `collision-revisions`：校验通过后原子发布的官方 SVO；
