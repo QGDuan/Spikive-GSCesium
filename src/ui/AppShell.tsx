@@ -24,7 +24,7 @@ export type {
 } from './contracts';
 export { LABEL_TYPES } from './contracts';
 
-const PRODUCT_TITLE = '面向建运一体化转型的实景三维多场景孪生应用底座系统';
+const PRODUCT_TITLE = '实景三维底座';
 
 export const AppShell = (props: AppShellProps) => {
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false);

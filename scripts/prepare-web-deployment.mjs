@@ -188,7 +188,7 @@ await chmod(resolve(deploymentRoot, 'start.sh'), 0o755);
 const packageJson = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
 const deploymentStats = await auditDeployment();
 await writeFile(resolve(deploymentRoot, 'release.json'), `${JSON.stringify({
-  product: '面向建运一体化转型的实景三维多场景孪生应用底座系统',
+  product: '实景三维底座',
   version: packageJson.version,
   createdAt: new Date().toISOString(),
   node: '>=22.22.1',

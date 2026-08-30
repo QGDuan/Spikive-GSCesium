@@ -1,4 +1,4 @@
-# 面向建运一体化转型的实景三维多场景孪生应用底座系统
+# 实景三维底座
 
 当前 `dev` 版本只使用一个 PlayCanvas Renderer。用户可以上传 Gaussian Splatting PLY，通过场景卡片完成首次切片、查看、体素碰撞计算/重新计算和永久删除。
 
@@ -221,7 +221,7 @@ npm run package:web
 安装包输出到：
 
 ```text
-release/packages/面向建运一体化转型的实景三维多场景孪生应用底座系统-0.1.0.zip
+release/packages/实景三维底座-0.1.0.zip
 ```
 
 同时生成 `release/packages/SHA256SUMS.txt` 和 `release/packages/release-manifest.json`。客户解压后进入 `web/` 目录：macOS/Linux 执行 `./start.sh`，Windows 执行 `start.cmd`。运行要求、端口、数据位置、备份与安全边界见 [`docs/WEB_DEPLOYMENT.md`](docs/WEB_DEPLOYMENT.md)。
