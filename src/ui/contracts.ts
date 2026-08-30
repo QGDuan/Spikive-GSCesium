@@ -1,4 +1,7 @@
+import type { CameraMode } from '../camera-mode';
+
 export type WorkspaceTab = 'scenes' | 'labels' | 'missions';
+export type { CameraMode } from '../camera-mode';
 export type LabelType = '起点' | '缺陷点' | '常态化巡检点' | '关键巡检点' | '一般巡检点';
 export const LABEL_TYPES: LabelType[] = ['起点', '缺陷点', '常态化巡检点', '关键巡检点', '一般巡检点'];
 
@@ -133,6 +136,7 @@ export type DatasetAction = 'view' | 'build' | 'collision' | 'display-gs' | 'dis
 
 export interface AppShellProps {
   activeTab: WorkspaceTab;
+  cameraMode: CameraMode;
   datasets: Dataset[];
   selectedDatasetId: string;
   activeTask: { type: 'visual' | 'collision'; datasetId: string } | null;
@@ -156,6 +160,7 @@ export interface AppShellProps {
   selectedMissionId?: string;
   planningMissionId?: string;
   onTab(tab: WorkspaceTab): void;
+  onCameraMode(mode: CameraMode): void;
   onReload(): void;
   onUpload(file: File, lodLevels: number): void;
   onCardSettings(datasetId: string, patch: Partial<CardSettings>): void;

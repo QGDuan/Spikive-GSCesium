@@ -1,4 +1,4 @@
-# 实景三维底座——Web 安装与使用说明
+# 面向建运一体化转型的实景三维多场景孪生应用底座系统——Web 安装与使用说明
 
 系统采用前后端同源的 Web 部署方式。后端进程同时提供管理界面、API 和场景资源，不使用桌面安装器。
 
@@ -22,7 +22,7 @@ npm run package:web
 
 命令会先生成 `release/web/` 部署目录，再生成：
 
-- `release/packages/实景三维底座-<版本号>.zip`；
+- `release/packages/面向建运一体化转型的实景三维多场景孪生应用底座系统-<版本号>.zip`；
 - `release/packages/SHA256SUMS.txt`；
 - `release/packages/release-manifest.json`。
 
@@ -70,7 +70,7 @@ shasum -a 256 -c SHA256SUMS.txt
 Windows PowerShell 可执行：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 '.\实景三维底座-0.1.0.zip'
+Get-FileHash -Algorithm SHA256 '.\面向建运一体化转型的实景三维多场景孪生应用底座系统-0.1.0.zip'
 ```
 
 输出值应与 `SHA256SUMS.txt` 一致。

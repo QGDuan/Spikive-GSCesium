@@ -9,6 +9,7 @@ import { startMonitor } from './monitor';
 import {
   AppShell,
   type AppShellProps,
+  type CameraMode,
   type CardSettings,
   type Dataset,
   type FlightMission,
@@ -66,6 +67,7 @@ let selectedLabelId = '';
 let selectedMissionId = '';
 let planningMissionId = '';
 let activeTab: WorkspaceTab = 'scenes';
+let cameraMode: CameraMode = 'third-person';
 let labelFilterType: LabelType | undefined;
 let labelFilterQuery = '';
 let labelPanelLabels: InspectionLabel[] = [];
@@ -133,6 +135,7 @@ const renderUi = () => {
   const missions = selectedDataset ? missionsByDataset.get(selectedDataset.id) ?? [] : [];
   root.render(<AppShell
     activeTab={activeTab}
+    cameraMode={cameraMode}
     datasets={datasets}
     selectedDatasetId={selectedDatasetId}
     activeTask={activeTask}
@@ -159,6 +162,14 @@ const renderUi = () => {
       activeTab = tab;
       renderUi();
       if (tab === 'missions') runAction(refreshMissionPanel);
+    }}
+    onCameraMode={(mode) => {
+      cameraMode = mode;
+      viewer.setCameraMode(mode);
+      if (mode === 'first-person') viewer.requestCameraPointerLock();
+      setStatus(mode === 'first-person'
+        ? '已切换为第一人称水平前向视角：W、A、S、D 移动，Q 抬高，E 降低，Esc 释放鼠标；若浏览器未锁定，请点击场景。'
+        : '已切换为第三人称：围绕焦点旋转，中键平移，滚轮改变观察距离。', 'ready');
     }}
     onReload={() => runAction(() => refreshDatasets())}
     onUpload={(file, lodLevels) => runAction(() => createDataset(file, lodLevels))}
@@ -325,6 +336,7 @@ const loadDataset = async (dataset: Dataset) => {
   if (loadedRevision !== revisionKey) {
     setStatus(`正在加载 ${dataset.name}…`);
     await viewer.load(dataset.visual.renderUrl, dataset.name);
+    cameraMode = viewer.cameraMode;
     loadedRevision = revisionKey;
     displayedLabelSignature = '';
   }
@@ -491,24 +503,29 @@ const handleDatasetAction = async (action: Parameters<AppShellProps['onDatasetAc
       labelPanelLabels = [];
       labelPanelTotal = 0;
       viewer.clear();
+      cameraMode = viewer.cameraMode;
     }
     setStatus(`${dataset.name} 已永久删除。`, 'ready');
   }
   await refreshDatasets(action === 'delete');
 };
 
-const selectInspectionLabel = async (labelId: string) => {
+const selectInspectionLabel = async (labelId: string, focusCamera = false) => {
   const dataset = datasets.find((item) => item.id === selectedDatasetId);
   const label = dataset && currentLabels(dataset).find((item) => item.id === labelId);
   if (!dataset || !label) return;
   await loadDataset(dataset);
   selectedLabelId = label.id;
   viewer.setSelectedInspectionPoint(label.id);
+  if (focusCamera) {
+    viewer.focusInspectionPoint(label);
+    cameraMode = 'first-person';
+  }
   labelFilterType = undefined;
   labelFilterQuery = '';
   await refreshLabelPanel();
   activeTab = 'labels';
-  setStatus(`${label.title} · (${label.position.x.toFixed(2)}, ${label.position.y.toFixed(2)}, ${label.position.z.toFixed(2)})`, 'ready');
+  setStatus(`${label.title} · (${label.position.x.toFixed(2)}, ${label.position.y.toFixed(2)}, ${label.position.z.toFixed(2)})${focusCamera ? ' · 已切换第一人称；若鼠标未锁定，请点击场景' : ''}`, 'ready');
 };
 
 const deleteInspectionLabel = async (labelId: string) => {
@@ -671,7 +688,7 @@ const onPointerUp = async (event: PointerEvent) => {
     markerPickInFlight = true;
     try {
       const labelId = await viewer.pickInspectionPoint(event.clientX, event.clientY);
-      if (labelId) await selectInspectionLabel(labelId);
+      if (labelId) await selectInspectionLabel(labelId, true);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error), 'error');
     } finally {
@@ -703,6 +720,11 @@ const onKeyDown = (event: KeyboardEvent) => {
   if (pickingDatasetId) {
     cancelLabelPick();
     setStatus('已取消添加巡检点。', 'ready');
+    return;
+  }
+  if (viewer.releaseCameraPointerLock()) {
+    event.preventDefault();
+    setStatus('已释放第一人称鼠标控制；当前仍为第一人称，点击场景可重新进入，或使用顶部按钮返回第三人称。', 'ready');
     return;
   }
   if (selectedLabelId) {

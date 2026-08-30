@@ -56,6 +56,8 @@ button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-v
 .top-nav { position: fixed; z-index: var(--ui-layer-navigation); top: 0; left: 0; right: 0; height: var(--ui-topbar-height); display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--ui-space-6); padding: 0 var(--ui-space-6); border-bottom: 1px solid var(--ui-color-border-muted); background: var(--ui-color-chrome); box-shadow: var(--ui-shadow-navigation); backdrop-filter: var(--ui-blur-panel); pointer-events: auto; }
 .brand { display: flex; min-width: 0; align-items: center; color: var(--ui-color-text); font: var(--ui-font-weight-bold) var(--ui-font-size-heading)/1.2 var(--ui-font-sans); letter-spacing: .01em; }
 .brand-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top-nav-actions { display: flex; align-items: center; gap: var(--ui-space-3); }
+.camera-mode-toggle { min-width: 76px; }
 .backend-badge { display: flex; align-items: center; gap: var(--ui-space-2); color: var(--ui-color-text-secondary); font: var(--ui-font-weight-semibold) var(--ui-font-size-helper)/1 var(--ui-font-mono); }
 .backend-badge i, .live-dot { width: 6px; height: 6px; border-radius: var(--ui-radius-round); background: var(--ui-color-accent); box-shadow: 0 0 8px var(--ui-color-accent); }
 
@@ -239,6 +241,8 @@ progress::-webkit-progress-value, progress::-moz-progress-bar { background: var(
 @media (max-width: 720px) {
   .top-nav { padding: 0 var(--ui-space-3); }
   .brand { font-size: var(--ui-font-size-title); }
+  .top-nav-actions { gap: var(--ui-space-2); }
+  .camera-mode-toggle { min-width: 68px; padding-inline: var(--ui-space-2); }
   .backend-badge span { max-width: 66px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .left-dock { top: calc(var(--ui-topbar-height) + var(--ui-space-3)); bottom: auto; height: min(52vh, 560px); }
   .left-dock.is-collapsed { height: auto; }

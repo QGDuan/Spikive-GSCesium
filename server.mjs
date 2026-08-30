@@ -1250,7 +1250,7 @@ server.listen(port, host, () => {
   const address = server.address();
   const actualPort = typeof address === 'object' && address ? address.port : port;
   const displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
-  console.log(`实景三维底座已启动：http://${displayHost}:${actualPort}（${production ? '生产模式' : '开发模式'}）`);
+  console.log(`面向建运一体化转型的实景三维多场景孪生应用底座系统已启动：http://${displayHost}:${actualPort}（${production ? '生产模式' : '开发模式'}）`);
 });
 
 const shutdown = async () => {

@@ -15,7 +15,7 @@ test('产品前端不显示底层三维引擎品牌', async () => {
     read('src/ui/MissionPanel.tsx')
   ]);
   assert.equal(files.some((file) => /play\s*canvas/i.test(file)), false);
-  assert.match(files[0], /实景三维底座/);
+  assert.match(files[0], /面向建运一体化转型的实景三维多场景孪生应用底座系统/);
   assert.match(files[2], /data-metric="backend"/);
   const visibleCopy = files.join('\n');
   for (const term of ['SPIKIVE', 'LOCAL SCENES', 'INSPECTION LABELS', 'FLIGHT ROUTES', 'FPS', '可见 GS', '系统 CPU', 'GPU 资源估算']) {
@@ -38,6 +38,7 @@ test('Web 部署同源提供前后端并隔离业务数据', async () => {
   assert.equal(packageJson.devDependencies['electron-builder'], undefined);
   assert.match(server, /process\.env\.SPIKIVE_DATA_ROOT/);
   assert.match(server, /process\.env\.SPIKIVE_HOST/);
+  assert.match(server, /面向建运一体化转型的实景三维多场景孪生应用底座系统已启动/);
   assert.match(deployScript, /release', 'web'/);
   assert.match(deployScript, /\.spikive-gs\/data/);
   assert.match(deployScript, /LOCALAPPDATA/);

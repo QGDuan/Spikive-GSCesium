@@ -33,7 +33,8 @@ import {
   Vec4,
   createGraphicsDevice
 } from 'playcanvas';
-import { CameraControls } from 'playcanvas/scripts/esm/camera-controls.mjs';
+import { InspectionCameraNavigation } from './camera-navigation';
+import { INSPECTION_FOCUS_DISTANCE_METERS, type CameraMode } from './camera-mode';
 import {
   SURFACE_DEPTH_SAMPLE_OFFSETS,
   createGaussianSurfaceSelection,
@@ -132,7 +133,8 @@ export class GsViewer {
   private app?: AppBase;
   private device?: GraphicsDevice;
   private camera?: Entity;
-  private controls?: { reset: (focus: Vec3, position: Vec3) => void };
+  private cameraNavigation?: InspectionCameraNavigation;
+  private activeCameraMode: CameraMode = 'third-person';
   private picker?: Picker;
   private inspectionFont?: CanvasFont;
   private inspectionMaterial?: StandardMaterial;
@@ -151,6 +153,9 @@ export class GsViewer {
   private pickerBusy = false;
   private readonly inspectionMeshIds = new Map<object, string>();
   private readonly resize = () => this.app?.resizeCanvas();
+  private readonly updateCameraNavigation = (deltaTime: number) => {
+    this.cameraNavigation?.update(deltaTime);
+  };
   private readonly updateInspectionLabels = () => {
     const camera = this.camera;
     const markers = this.current?.markers;
@@ -230,20 +235,10 @@ export class GsViewer {
     this.camera.setLocalPosition(0, 1, 5);
     this.camera.lookAt(0, 0, 0);
     this.app.root.addChild(this.camera);
-    this.camera.addComponent('script');
-    const controls = this.camera.script?.create(CameraControls, {
-      properties: {
-        enableFly: false,
-        enableOrbit: true,
-        focusPoint: new Vec3(0, 0, 0)
-      }
-    });
-    if (!controls) {
-      throw new Error('三维相机控制器初始化失败。');
-    }
-    this.controls = controls as unknown as { reset: (focus: Vec3, position: Vec3) => void };
+    this.cameraNavigation = new InspectionCameraNavigation(this.canvas, this.camera);
 
     window.addEventListener('resize', this.resize);
+    this.app.on('update', this.updateCameraNavigation);
     this.app.on('update', this.updateInspectionLabels);
     this.app.start();
   }
@@ -257,6 +252,49 @@ export class GsViewer {
       return 'WebGL2';
     }
     return this.device?.deviceType || '未知';
+  }
+
+  get cameraMode() {
+    return this.activeCameraMode;
+  }
+
+  setCameraMode(mode: CameraMode) {
+    this.activeCameraMode = mode;
+    this.cameraNavigation?.setCameraMode(mode);
+  }
+
+  releaseCameraPointerLock() {
+    return this.cameraNavigation?.releasePointerLock() ?? false;
+  }
+
+  requestCameraPointerLock() {
+    return this.cameraNavigation?.requestPointerLock() ?? false;
+  }
+
+  focusInspectionPoint(point: InspectionPoint) {
+    const current = this.current;
+    const cameraNavigation = this.cameraNavigation;
+    if (!current || !cameraNavigation || !this.camera) {
+      throw new Error('请先加载对应的高斯场景。');
+    }
+    if (!point.normal) {
+      throw new Error(`巡检点“${point.title ?? point.id}”缺少有效法向量，无法建立第一人称观察方向。`);
+    }
+
+    const normal = new Vec3(point.normal.x, point.normal.y, point.normal.z);
+    if (normal.lengthSq() <= 1e-12) {
+      throw new Error(`巡检点“${point.title ?? point.id}”的法向量无效，无法建立第一人称观察方向。`);
+    }
+    normal.normalize();
+    const localTarget = new Vec3(point.position.x, point.position.y, point.position.z);
+    const localPosition = localTarget.clone().add(normal.mulScalar(INSPECTION_FOCUS_DISTANCE_METERS));
+    const transform = current.root.getWorldTransform();
+    const worldTarget = transform.transformPoint(localTarget, new Vec3());
+    const worldPosition = transform.transformPoint(localPosition, new Vec3());
+
+    this.setCameraMode('first-person');
+    cameraNavigation.focusFirstPerson(worldTarget, worldPosition);
+    cameraNavigation.requestPointerLock();
   }
 
   async load(url: string, name: string) {
@@ -309,10 +347,10 @@ export class GsViewer {
       const worldCenter = root.getWorldTransform().transformPoint(bounds.center, new Vec3());
       root.setLocalPosition(-worldCenter.x, -worldCenter.y, -worldCenter.z);
       const diagonal = Math.max(bounds.halfExtents.length() * 2, 1);
-      const position = new Vec3(0, diagonal * 0.15, diagonal * 0.9);
       this.camera!.camera!.nearClip = Math.max(diagonal / 10_000, 0.01);
       this.camera!.camera!.farClip = diagonal * 20;
-      this.controls?.reset(new Vec3(0, 0, 0), position);
+      this.setCameraMode('third-person');
+      this.cameraNavigation?.resetThirdPerson(Vec3.ZERO, diagonal * 20);
 
       const previous = this.current;
       this.current = {
@@ -770,6 +808,9 @@ export class GsViewer {
   clear() {
     this.generation += 1;
     this.voxelDebugGeneration += 1;
+    // Clearing the scene also closes the camera-mode lifecycle. Do this before the early return
+    // so a deleted/failed scene cannot leave Pointer Lock or first-person input active.
+    this.setCameraMode('third-person');
     if (!this.current || !this.app) {
       return;
     }
@@ -810,7 +851,10 @@ export class GsViewer {
   }
 
   private destroyApplication() {
+    this.app?.off('update', this.updateCameraNavigation);
     this.app?.off('update', this.updateInspectionLabels);
+    this.cameraNavigation?.dispose();
+    this.cameraNavigation = undefined;
     this.picker?.destroy();
     this.picker = undefined;
     this.inspectionFont?.destroy();

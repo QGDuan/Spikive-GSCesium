@@ -77,3 +77,39 @@ test('管理导航与标题合并且左右卡片折叠不移除业务节点', ()
   assert.match(performance, /id="performance-metrics"/);
   assert.doesNotMatch(performance, /collapsed\s*&&\s*<div[^>]+metric-grid/);
 });
+
+test('第一人称与第三人称模式互斥且巡检点法向驱动近景', () => {
+  const shell = read('src/ui/AppShell.tsx');
+  const main = read('src/main.tsx');
+  const viewer = read('src/viewer.ts');
+  const navigation = read('src/camera-navigation.ts');
+  const cameraMode = read('src/camera-mode.ts');
+  assert.match(shell, /className="top-nav-actions"[\s\S]*className="camera-mode-toggle"[\s\S]*data-metric="backend"/);
+  assert.match(shell, /第一人称/);
+  assert.match(shell, /第三人称/);
+  assert.match(main, /selectInspectionLabel\(labelId, true\)/);
+  assert.match(navigation, /new KeyboardMouseSource\(\{ pointerLock: true \}\)/);
+  assert.match(navigation, /new OrbitController\(\)/);
+  assert.doesNotMatch(navigation, /FlyController/);
+  assert.match(navigation, /key\[keyCode\.Q\] - key\[keyCode\.E\]/);
+  assert.match(navigation, /resolveFirstPersonMovement\(this\.state\.axis, this\.pose\.angles\.y/);
+  assert.match(navigation, /updateFirstPersonLook\(this\.pose\.angles/);
+  assert.match(navigation, /wheel \* ZOOM_SPEED/);
+  assert.match(navigation, /createLevelFirstPersonPose/);
+  assert.match(main, /viewer\.requestCameraPointerLock\(\)/);
+  assert.match(navigation, /releasePointerLock\(\)/);
+  assert.match(cameraMode, /INSPECTION_FOCUS_DISTANCE_METERS = 4/);
+  assert.match(cameraMode, /THIRD_PERSON_DEFAULT_DISTANCE_METERS = 15/);
+  assert.match(cameraMode, /THIRD_PERSON_DEFAULT_HEIGHT_METERS = 5/);
+  assert.match(viewer, /localTarget\.clone\(\)\.add\(normal\.mulScalar\(INSPECTION_FOCUS_DISTANCE_METERS\)\)/);
+  assert.match(viewer, /cameraNavigation\.focusFirstPerson\(worldTarget, worldPosition\)/);
+  assert.match(viewer, /clear\(\)\s*\{[\s\S]*?this\.setCameraMode\('third-person'\);[\s\S]*?if \(!this\.current \|\| !this\.app\)/);
+  assert.match(main, /viewer\.clear\(\);\s*cameraMode = viewer\.cameraMode;/);
+  assert.doesNotMatch(viewer, /CameraControls|ThirdPersonController|FirstPersonController/);
+});
+
+test('浏览器与顶栏使用系统全称', () => {
+  const title = '面向建运一体化转型的实景三维多场景孪生应用底座系统';
+  assert.ok(read('index.html').includes(`<title>${title}</title>`));
+  assert.ok(read('src/ui/AppShell.tsx').includes(`const PRODUCT_TITLE = '${title}'`));
+});
