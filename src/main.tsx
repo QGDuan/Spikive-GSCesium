@@ -18,6 +18,7 @@ import {
   type MissionInput,
   type WorkspaceTab
 } from './ui/AppShell';
+import { formatBackend } from './ui/format';
 import { GsViewer } from './viewer';
 
 interface LabelSnapshot {
@@ -77,8 +78,8 @@ let pickingDatasetId = '';
 let pickInFlight = false;
 let markerPickInFlight = false;
 let pointerStart: { x: number; y: number } | undefined;
-let statusState: AppShellProps['status'] = { message: '正在初始化 PlayCanvas…', state: 'loading' };
-let uploadState: AppShellProps['upload'] = { progress: 0, stage: '选择 PLY 后开始', busy: false };
+let statusState: AppShellProps['status'] = { message: '正在初始化三维引擎…', state: 'loading' };
+let uploadState: AppShellProps['upload'] = { progress: 0, stage: '选择高斯点云文件后开始', busy: false };
 let pollTimer: number | undefined;
 let stopMonitor: (() => void) | undefined;
 let disposed = false;
@@ -88,9 +89,10 @@ const clampInteger = (value: number, minimum: number, maximum: number, fallback:
 
 const formatBytes = (value?: number) => {
   if (!value) return '—';
-  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GiB`;
-  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
-  return `${(value / 1024).toFixed(1)} KiB`;
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} 吉字节`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} 兆字节`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} 千字节`;
+  return `${value} 字节`;
 };
 
 const requestJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
@@ -100,7 +102,7 @@ const requestJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
     cache: 'no-store'
   });
   const body = (await response.json()) as T & { error?: string };
-  if (!response.ok) throw new Error(body.error || `请求失败：HTTP ${response.status}`);
+  if (!response.ok) throw new Error(body.error || `请求失败，状态码 ${response.status}`);
   return body;
 };
 
@@ -338,7 +340,7 @@ const loadDataset = async (dataset: Dataset) => {
   syncViewerInspectionPoints(dataset);
   syncViewerRoute(dataset);
   const count = dataset.visual.counts[0] ?? 0;
-  setStatus(`${dataset.name} · LOD0 ${count.toLocaleString('zh-CN')} Gaussian · ${dataset.lodLevels} 层`, 'ready');
+  setStatus(`${dataset.name} · 第零层 ${count.toLocaleString('zh-CN')} 个高斯点 · 共 ${dataset.lodLevels} 层`, 'ready');
 };
 
 const refreshDatasets = async (autoLoad = false) => {
@@ -387,19 +389,19 @@ const uploadFile = (dataset: Dataset, file: File) => new Promise<void>((resolve,
   request.upload.onprogress = (event) => {
     if (!event.lengthComputable) return;
     const value = (event.loaded / event.total) * 100;
-    uploadState = { progress: value, stage: `正在上传 PLY：${Math.round(value)}%`, busy: true };
+    uploadState = { progress: value, stage: `正在上传高斯点云文件：${Math.round(value)}%`, busy: true };
     renderUi();
   };
   request.onload = () => {
     if (request.status >= 200 && request.status < 300) return resolve();
     try {
-      reject(new Error((JSON.parse(request.responseText) as { error?: string }).error || `上传失败：HTTP ${request.status}`));
+      reject(new Error((JSON.parse(request.responseText) as { error?: string }).error || `上传失败，状态码 ${request.status}`));
     } catch {
-      reject(new Error(`上传失败：HTTP ${request.status}`));
+      reject(new Error(`上传失败，状态码 ${request.status}`));
     }
   };
-  request.onerror = () => reject(new Error('PLY 上传网络中断。'));
-  request.onabort = () => reject(new Error('PLY 上传已取消。'));
+  request.onerror = () => reject(new Error('高斯点云文件上传网络中断。'));
+  request.onabort = () => reject(new Error('高斯点云文件上传已取消。'));
   request.send(file);
 });
 
@@ -413,7 +415,7 @@ const createDataset = async (file: File, lodLevels: number) => {
     });
     await refreshDatasets();
     await uploadFile(dataset, file);
-    uploadState = { progress: 100, stage: 'PLY 已上传，请在场景卡片中点击“开始切片”。', busy: false };
+    uploadState = { progress: 100, stage: '高斯点云文件已上传，请在场景卡片中点击“开始切片”。', busy: false };
     await refreshDatasets();
   } catch (error) {
     uploadState = { progress: 0, stage: error instanceof Error ? error.message : String(error), busy: false };
@@ -443,19 +445,19 @@ const handleDatasetAction = async (action: Parameters<AppShellProps['onDatasetAc
       method: 'POST',
       body: JSON.stringify({ voxelSize: settings.voxelSize, voxelOpacity: settings.voxelOpacity })
     });
-    setStatus(`${dataset.name} 已进入 GPU 并行体素任务。`);
+    setStatus(`${dataset.name} 已进入图形处理器并行体素任务。`);
   } else if (action === 'display-gs') {
     const sceneWasLoaded = loadedRevision.startsWith(`${dataset.id}:`);
     const visible = sceneWasLoaded ? !viewer.gaussianVisible : true;
     await loadDataset(dataset);
     viewer.setGaussianVisible(visible);
-    setStatus(visible ? `${dataset.name} Gaussian 已显示。` : `${dataset.name} Gaussian 已隐藏；体素和巡检点状态不变。`, 'ready');
+    setStatus(visible ? `${dataset.name} 高斯场景已显示。` : `${dataset.name} 高斯场景已隐藏；体素和巡检点状态不变。`, 'ready');
   } else if (action === 'display-voxel') {
     const debugMeshUrl = dataset.collision.debugMeshUrl;
     if (!debugMeshUrl) {
       if (dataset.collision.status !== 'ready') throw new Error('请先完成体素计算。');
       if (!window.confirm(
-        `“${dataset.name}”的旧体素版本没有调试网格。是否使用当前 ${settings.voxelSize} m / ` +
+        `“${dataset.name}”的旧体素版本没有调试网格。是否使用当前 ${settings.voxelSize} 米 / ` +
         `透明度 ${settings.voxelOpacity} 参数重新生成？系统不会自动改参，旧版本会保留到新版本校验通过。`
       )) return;
       await requestJson(`/api/datasets/${dataset.id}/collision/build`, {
@@ -544,7 +546,7 @@ const startLabelPick = async () => {
   canvas.classList.add('is-picking');
   setSelectionCircleVisible(true);
   renderUi();
-  setStatus(`单击 GS 表面：使用 PlayCanvas ${FIXED_CIRCLE_RADIUS_PIXELS}px 深度 Picker 读取 Alpha 可见前表面。`);
+  setStatus(`单击高斯表面：使用 ${FIXED_CIRCLE_RADIUS_PIXELS} 像素深度选择读取透明度可见前表面。`);
 };
 
 const createInspectionLabel = async (metadata: LabelMetadata) => {
@@ -618,7 +620,7 @@ const calculateMission = async (missionId: string) => {
   if (!dataset) return;
   planningMissionId = missionId;
   renderUi();
-  setStatus('正在使用 SVO 执行膨胀扫掠、绕障和最终逐段复检…');
+  setStatus('正在使用稀疏体素树执行膨胀扫掠、绕障和最终逐段复检…');
   try {
     const mission = await requestJson<FlightMission>(`/api/missions/${missionId}/plan`, { method: 'POST' });
     const current = missionsByDataset.get(dataset.id) ?? [];
@@ -681,13 +683,13 @@ const onPointerUp = async (event: PointerEvent) => {
   if (!dataset) return;
   pickInFlight = true;
   renderUi();
-  setStatus(`正在用固定 ${FIXED_CIRCLE_RADIUS_PIXELS}px 区域读取 Alpha 可见前表面…`);
+  setStatus(`正在用固定 ${FIXED_CIRCLE_RADIUS_PIXELS} 像素区域读取透明度可见前表面…`);
   try {
     const selection = await viewer.pickGaussianSurface(event.clientX, event.clientY);
-    if (!selection) throw new Error('点击位置没有可选的 Gaussian，请贴近目标后重新选择。');
+    if (!selection) throw new Error('点击位置没有可选的高斯点，请贴近目标后重新选择。');
     pendingLabelSelection = selection;
     cancelLabelPick();
-    setStatus(`已取得 ${selection.neighborCount.toLocaleString('zh-CN')} 个 GPU 前表面深度采样，请在标签页完成初始化。`, 'ready');
+    setStatus(`已取得 ${selection.neighborCount.toLocaleString('zh-CN')} 个图形处理器前表面深度采样，请在标签页完成初始化。`, 'ready');
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), 'error');
   } finally {
@@ -733,10 +735,10 @@ import.meta.hot?.dispose(dispose);
 
 const start = async () => {
   renderUi();
-  setStatus('正在创建 PlayCanvas 图形设备…');
+  setStatus('正在创建三维图形设备…');
   await viewer.initialize();
   stopMonitor = startMonitor(viewer);
-  setStatus(`PlayCanvas ${viewer.backend} 已就绪，正在读取场景卡片…`);
+  setStatus(`${formatBackend(viewer.backend)}已就绪，正在读取场景卡片…`);
   await refreshDatasets(true);
   pollTimer = window.setInterval(() => {
     void refreshDatasets().catch((error) => console.warn('场景卡片状态刷新失败：', error));

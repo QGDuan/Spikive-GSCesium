@@ -1,6 +1,8 @@
 {
-  "name": "spikive-playcanvas-official-lod",
-  "version": "0.0.1",
+  "name": "spikive-gs-inspection",
+  "productName": "面向建运一体化转型的实景三维多场景孪生应用底座系统",
+  "version": "0.1.0",
+  "description": "Spikive GS 本地三维巡检与航线规划平台",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,7 +10,9 @@
     "start": "node server.mjs --production",
     "build:lod": "node scripts/build-streamed-sog.mjs",
     "build": "tsc --noEmit && vite build",
-    "test": "node --test scripts/*.test.mjs server/*.test.mjs"
+    "test": "node --test scripts/*.test.mjs server/*.test.mjs",
+    "deploy:web": "node scripts/prepare-web-deployment.mjs",
+    "package:web": "npm run deploy:web && node scripts/package-web-release.mjs"
   },
   "dependencies": {
     "@playcanvas/splat-transform": "3.3.0",
@@ -19,6 +23,7 @@
   "devDependencies": {
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
+    "esbuild": "0.28.2",
     "typescript": "7.0.2",
     "vite": "8.2.2"
   },

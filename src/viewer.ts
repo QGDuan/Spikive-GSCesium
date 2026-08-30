@@ -239,7 +239,7 @@ export class GsViewer {
       }
     });
     if (!controls) {
-      throw new Error('PlayCanvas CameraControls 初始化失败。');
+      throw new Error('三维相机控制器初始化失败。');
     }
     this.controls = controls as unknown as { reset: (focus: Vec3, position: Vec3) => void };
 
@@ -262,7 +262,7 @@ export class GsViewer {
   async load(url: string, name: string) {
     const app = this.app;
     if (!app || this.disposed) {
-      throw new Error('PlayCanvas 尚未初始化或已经销毁。');
+      throw new Error('三维引擎尚未初始化或已经销毁。');
     }
     if (this.current?.url === url) {
       return;
@@ -303,7 +303,7 @@ export class GsViewer {
       }
       const bounds = entity.gsplat?.customAabb;
       if (!bounds) {
-        throw new Error('SOG 已加载，但 PlayCanvas 未生成 Gaussian 包围盒。');
+        throw new Error('场景已加载，但未能取得高斯场景包围盒。');
       }
 
       const worldCenter = root.getWorldTransform().transformPoint(bounds.center, new Vec3());
@@ -356,7 +356,7 @@ export class GsViewer {
 
   setGaussianVisible(visible: boolean) {
     if (!this.current || this.disposed) {
-      throw new Error('请先加载对应的 GS 场景。');
+      throw new Error('请先加载对应的高斯场景。');
     }
     this.current.entity.enabled = visible;
   }
@@ -366,7 +366,7 @@ export class GsViewer {
     const scene = this.current;
     const material = this.voxelDebugMaterial;
     if (!app || !scene || !material || this.disposed) {
-      throw new Error('请先加载对应的 GS 场景。');
+      throw new Error('请先加载对应的高斯场景。');
     }
     if (scene.voxelDebug?.url === url) {
       this.clearVoxelDebug();
@@ -391,7 +391,7 @@ export class GsViewer {
 
       const resource = asset.resource as ContainerResource | undefined;
       if (!resource?.instantiateRenderEntity) {
-        throw new Error('体素调试网格未包含可渲染的 GLB Mesh。');
+        throw new Error('体素调试网格不包含可渲染的网格数据。');
       }
       entity = resource.instantiateRenderEntity({
         castShadows: false,

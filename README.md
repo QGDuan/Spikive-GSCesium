@@ -1,4 +1,4 @@
-# Spikive GS — PlayCanvas 本地数据管理与体素管线
+# 面向建运一体化转型的实景三维多场景孪生应用底座系统
 
 当前 `dev` 版本只使用一个 PlayCanvas Renderer。用户可以上传 Gaussian Splatting PLY，通过场景卡片完成首次切片、查看、体素碰撞计算/重新计算和永久删除。
 
@@ -13,6 +13,9 @@
 - 起点唯一约束、标签后端鲁棒性与历史图片扩展：[`docs/LABEL_HISTORY_MEDIA_DESIGN.md`](docs/LABEL_HISTORY_MEDIA_DESIGN.md)；
 - React UI 设计系统、容器原语与后续开发规范：[`docs/UI_SYSTEM.md`](docs/UI_SYSTEM.md)。
 - 飞行路线、观察节点、SVO 膨胀避障与数据库闭环：[`docs/FLIGHT_ROUTE_PLANNING.md`](docs/FLIGHT_ROUTE_PLANNING.md)。
+- Web 前后端生产构建、服务器启动与数据备份：[`docs/WEB_DEPLOYMENT.md`](docs/WEB_DEPLOYMENT.md)。
+
+系统以 Web 方式部署：后端同时提供 API、前端静态资源与版本化场景数据，浏览器通过同一地址访问，不需要 Electron 或桌面安装器。
 
 ## 1. 前置条件及环境配置
 
@@ -198,6 +201,28 @@ var/
 npm test
 npm run build
 ```
+
+生成可直接复制到 macOS、Linux 或 Windows 服务器的 Web 部署目录：
+
+```bash
+npm run deploy:web
+```
+
+产物输出到 `release/web/`，包含压缩后的前端、单文件后端、必要的官方转换运行时和跨平台启动脚本；不包含业务 `var/`、PLY、SQLite、TS/TSX 或 Source Map。详见 [`docs/WEB_DEPLOYMENT.md`](docs/WEB_DEPLOYMENT.md)。
+
+生成可交付客户的 Web 安装包：
+
+```bash
+npm run package:web
+```
+
+安装包输出到：
+
+```text
+release/packages/面向建运一体化转型的实景三维多场景孪生应用底座系统-0.1.0.zip
+```
+
+同时生成 `release/packages/SHA256SUMS.txt` 和 `release/packages/release-manifest.json`。客户解压后进入 `web/` 目录：macOS/Linux 执行 `./start.sh`，Windows 执行 `start.cmd`。运行要求、端口、数据位置、备份与安全边界见 [`docs/WEB_DEPLOYMENT.md`](docs/WEB_DEPLOYMENT.md)。
 
 保留的命令行切片入口默认也生成 5 层：
 

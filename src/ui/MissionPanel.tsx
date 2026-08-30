@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { AppShellProps, FlightProfile, MissionInput } from './contracts';
-import { shortRevision } from './format';
 import { Button, EmptyState, Icon, SectionHeading, StatusMark, UiContainer } from './primitives';
 
 const DEFAULT_PROFILE: FlightProfile = {
@@ -12,11 +11,11 @@ const DEFAULT_PROFILE: FlightProfile = {
 };
 
 const profileFields: Array<{ key: keyof FlightProfile; label: string; minimum: number }> = [
-  { key: 'speed', label: '飞行速度 / m·s⁻¹', minimum: 0.1 },
-  { key: 'inflationRadius', label: '无人机膨胀系数 / m', minimum: 0.1 },
-  { key: 'observationDistance', label: '观察距离 / m（仅巡检）', minimum: 0.1 },
-  { key: 'minimumSpacing', label: '最小点间距 / m', minimum: 0 },
-  { key: 'maximumSpacing', label: '最大点间距 / m', minimum: 0.1 }
+  { key: 'speed', label: '飞行速度（米/秒）', minimum: 0.1 },
+  { key: 'inflationRadius', label: '无人机膨胀系数（米）', minimum: 0.1 },
+  { key: 'observationDistance', label: '观察距离（米，仅巡检）', minimum: 0.1 },
+  { key: 'minimumSpacing', label: '最小点间距（米）', minimum: 0 },
+  { key: 'maximumSpacing', label: '最大点间距（米）', minimum: 0.1 }
 ];
 
 const statusInfo = (status: 'draft' | 'valid' | 'invalid') => status === 'valid'
@@ -55,12 +54,12 @@ export const MissionPanel = (props: AppShellProps) => {
   const canCreate = ready && Boolean(input.name && input.startLabelId && input.labelIds.length) &&
     profileValid && profile.maximumSpacing >= profile.minimumSpacing;
   return <UiContainer variant="panel" className="workspace-panel" aria-label="飞行路线规划">
-    <header className="workspace-header"><div><span className="overline">FLIGHT ROUTES</span><h1>飞行路线</h1></div><span className="header-count">{props.missions.length}</span></header>
+    <header className="workspace-header"><div><h1>飞行路线</h1></div><span className="header-count">{props.missions.length}</span></header>
     <div className="workspace-scroll">
-      <UiContainer as="div" variant="subtle" className={`scene-binding${ready ? ' is-ready' : ''}`}><Icon name="database"/><span><small>当前场景</small><strong>{dataset?.name ?? '尚未加载场景'}</strong></span>{dataset?.visual && <code>{shortRevision(dataset.activeVisualRevision)}</code>}</UiContainer>
+      <UiContainer as="div" variant="subtle" className={`scene-binding${ready ? ' is-ready' : ''}`}><Icon name="database"/><span><small>当前场景</small><strong>{dataset?.name ?? '尚未加载场景'}</strong></span></UiContainer>
       {!ready && <p className="binding-help">请先到“场景”页查看一个已切片的自定义场景。</p>}
       <UiContainer variant="subtle" className="mission-create">
-        <SectionHeading aside="局部 Z-up · 体素安全真值">新建航线</SectionHeading>
+        <SectionHeading aside="局部米制竖直轴向上坐标 · 体素安全真值">新建航线</SectionHeading>
         <label className="field"><span>航线名称</span><input maxLength={80} value={name} onChange={(event) => setName(event.target.value)}/></label>
         <label className="field"><span>起点</span><select value={start?.id ?? ''} disabled><option value={start?.id ?? ''}>{start ? start.title : '当前场景尚未建立起点标签'}</option></select></label>
         <div className="mission-profile">{profileFields.map((field) => <label key={field.key}><span>{field.label}</span><input type="number" step="0.1" min={field.minimum} value={profile[field.key]} onChange={(event) => setProfile({ ...profile, [field.key]: Number(event.target.value) })}/></label>)}</div>
@@ -79,7 +78,7 @@ export const MissionPanel = (props: AppShellProps) => {
           const planning = props.planningMissionId === mission.id;
           return <UiContainer as="article" variant="card" key={mission.id} className={`mission-card${selected ? ' is-selected' : ''}`}>
             <button type="button" className="mission-card__select" onClick={() => props.onSelectMission(mission.id)}><span><strong>{mission.name}</strong><small>{mission.labelIds.length} 个标签 · {mission.waypoints.length} 个航点</small></span><StatusMark state={status.state}>{status.label}</StatusMark></button>
-            <div className="mission-card__profile"><span>{mission.profile.speed.toFixed(1)} m/s</span><span>膨胀 {mission.profile.inflationRadius.toFixed(1)} m</span><span>观察 {mission.profile.observationDistance.toFixed(1)} m</span><span>{mission.profile.minimumSpacing.toFixed(1)}–{mission.profile.maximumSpacing.toFixed(1)} m</span></div>
+            <div className="mission-card__profile"><span>{mission.profile.speed.toFixed(1)} 米/秒</span><span>膨胀 {mission.profile.inflationRadius.toFixed(1)} 米</span><span>观察 {mission.profile.observationDistance.toFixed(1)} 米</span><span>{mission.profile.minimumSpacing.toFixed(1)}–{mission.profile.maximumSpacing.toFixed(1)} 米</span></div>
             {mission.error && <p className="mission-error">{mission.error}</p>}
             <div className="mission-card__actions"><Button size="compact" icon="route" tone="primary" disabled={planning || dataset?.collision.status !== 'ready'} onClick={() => props.onPlanMission(mission.id)}>{planning ? '计算中…' : mission.status === 'draft' ? '计算航线' : '重新计算'}</Button>{confirmDeleteId === mission.id ? <><Button size="compact" tone="ghost" onClick={() => setConfirmDeleteId('')}>取消</Button><Button size="compact" tone="danger" onClick={() => props.onDeleteMission(mission.id)}>确认删除</Button></> : <Button size="compact" tone="ghost" icon="trash" onClick={() => setConfirmDeleteId(mission.id)}>删除</Button>}</div>
           </UiContainer>;

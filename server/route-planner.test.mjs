@@ -52,7 +52,7 @@ test('起点法向通道被占用时不会退化成观察点搜索', () => {
     profile: { speed: 4, inflationRadius: 0.5, observationDistance: 8, minimumSpacing: 0.5, maximumSpacing: 100 }
   });
   assert.equal(result.valid, false);
-  assert.match(result.error, /沿法向 1.5 m/);
+  assert.match(result.error, /沿法向 1.5 米/);
   assert.equal(result.waypoints.length, 0);
 });
 

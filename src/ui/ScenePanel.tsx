@@ -38,13 +38,13 @@ const SceneCard = ({ dataset, selected, loaded, busy, settings, gaussianVisible,
   const voxelVisible = loaded && Boolean(dataset.collision.debugMeshUrl) && voxelDebugUrl === dataset.collision.debugMeshUrl;
   return <UiContainer as="article" variant="card" className={`scene-card${selected ? ' is-selected' : ''}`}>
     <div className="scene-card__head">
-      <div className="scene-card__title"><strong title={dataset.name}>{dataset.name}</strong><small>{dataset.builtin ? '内置场景' : formatBytes(dataset.source?.bytes)}</small></div>
+      <div className="scene-card__title"><strong title={dataset.name}>{dataset.name}</strong></div>
       <Button size="compact" icon="eye" onClick={() => onAction('view')} disabled={!dataset.visual} aria-label={`查看 ${dataset.name}`}>查看</Button>
     </div>
     <div className="status-row"><StatusMark state={visual.state}>{visual.label}</StatusMark><StatusMark state={collision.state}>{collision.label}</StatusMark></div>
     <div className="scene-card__meta">
       {dataset.visual
-        ? <><span>{dataset.lodLevels} LOD</span><span>{dataset.visual.counts[0]?.toLocaleString('zh-CN') ?? '—'} GS</span><span>{formatBytes(dataset.visual.bytes)}</span><span>{dataset.labelCount ?? 0} 标签</span><span>{dataset.missionCount ?? 0} 航线</span></>
+        ? <><span>{dataset.labelCount ?? 0} 标签</span><span>{dataset.missionCount ?? 0} 航线</span></>
         : <span>等待首次切片</span>}
     </div>
     <p className={`scene-card__stage${dataset.error || dataset.collision.error ? ' is-error' : ''}`}>
@@ -53,8 +53,8 @@ const SceneCard = ({ dataset, selected, loaded, busy, settings, gaussianVisible,
     {taskRunning && <progress value={dataset.collision.status === 'building' ? dataset.collision.progress : dataset.progress} max="100"/>}
     {!dataset.builtin && <>
       <div className="settings-grid">
-        {!dataset.visual && <label><span>LOD 层数</span><input type="number" min="1" max="20" value={settings.lodLevels} onChange={(event) => onSettings({ lodLevels: Number(event.target.value) })}/></label>}
-        <label><span>体素 / m</span><input type="number" min="0.02" max="5" step="0.01" value={settings.voxelSize} onChange={(event) => onSettings({ voxelSize: Number(event.target.value) })}/></label>
+        {!dataset.visual && <label><span>切片层数</span><input type="number" min="1" max="20" value={settings.lodLevels} onChange={(event) => onSettings({ lodLevels: Number(event.target.value) })}/></label>}
+        <label><span>体素边长（米）</span><input type="number" min="0.02" max="5" step="0.01" value={settings.voxelSize} onChange={(event) => onSettings({ voxelSize: Number(event.target.value) })}/></label>
         <label><span>透明度阈值</span><input type="number" min="0" max="1" step="0.01" value={settings.voxelOpacity} onChange={(event) => onSettings({ voxelOpacity: Number(event.target.value) })}/></label>
       </div>
       <div className="scene-actions">
@@ -81,21 +81,21 @@ export const ScenePanel = (props: AppShellProps) => {
     if (fileInput.current) fileInput.current.value = '';
   }, [props.upload.busy, props.upload.progress]);
   return <UiContainer variant="panel" className="workspace-panel" aria-label="场景管理">
-    <header className="workspace-header"><div><span className="overline">LOCAL SCENES</span><h1>场景管理</h1></div><Button size="compact" icon="refresh" tone="ghost" onClick={props.onReload} aria-label="刷新场景">刷新</Button></header>
+    <header className="workspace-header"><div><h1>场景管理</h1></div><Button size="compact" icon="refresh" tone="ghost" onClick={props.onReload} aria-label="刷新场景">刷新</Button></header>
     <div className="workspace-scroll">
       <UiContainer variant="subtle" className="import-block">
-        <SectionHeading aside="LOD0 保留完整数据">导入 PLY</SectionHeading>
+        <SectionHeading aside="第零层保留完整数据">导入高斯点云</SectionHeading>
         <label className="file-control">
           <input ref={fileInput} type="file" accept=".ply,application/octet-stream" onChange={(event) => setFile(event.target.files?.[0])}/>
-          <Icon name="upload"/><span>{file ? file.name : '选择 Gaussian Splatting PLY'}</span><small>{file ? formatBytes(file.size) : '本地文件'}</small>
+          <Icon name="upload"/><span>{file ? file.name : '选择高斯点云文件'}</span><small>{file ? formatBytes(file.size) : '本地文件'}</small>
         </label>
         <div className="import-options"><label><span>切片分级</span><input type="number" min="1" max="20" value={lodLevels} onChange={(event) => setLodLevels(Math.max(1, Math.min(20, Number(event.target.value) || 5)))}/></label><code>{createRatios(lodLevels).map((value) => `${value}%`).join(' / ')}</code></div>
         <Button tone="primary" icon="upload" disabled={!file || props.upload.busy} onClick={() => file && props.onUpload(file, lodLevels)}>{props.upload.busy ? '正在上传…' : '上传并创建数据'}</Button>
         {(props.upload.busy || props.upload.progress > 0) && <div className="task-progress"><progress max="100" value={props.upload.progress}/><span>{props.upload.stage}</span></div>}
       </UiContainer>
-      <SectionHeading className="scene-list-heading" aside={`SOG ${props.workerCount || '—'} workers · 重任务串行`}>场景</SectionHeading>
+      <SectionHeading className="scene-list-heading" aside={`切片工作线程 ${props.workerCount || '—'} 个 · 重任务串行`}>场景</SectionHeading>
       <div className="scene-list">
-        {props.datasets.length === 0 && <EmptyState icon="database" title="尚无场景" description="从上方导入 PLY 开始"/>}
+        {props.datasets.length === 0 && <EmptyState icon="database" title="尚无场景" description="从上方导入高斯点云开始"/>}
         {props.datasets.map((dataset) => <SceneCard key={dataset.id} dataset={dataset}
           selected={dataset.id === props.selectedDatasetId} loaded={props.loadedRevision.startsWith(`${dataset.id}:`)}
           busy={Boolean(props.activeTask)} settings={props.cardSettings[dataset.id] ?? { lodLevels: dataset.lodLevels || 5, voxelSize: dataset.collision.voxelSize || 0.2, voxelOpacity: dataset.collision.voxelOpacity ?? 0.1 }}
@@ -103,6 +103,6 @@ export const ScenePanel = (props: AppShellProps) => {
           onSettings={(patch) => props.onCardSettings(dataset.id, patch)} onAction={(action) => props.onDatasetAction(action, dataset.id)}/>) }
       </div>
     </div>
-    <footer className="workspace-footer">本地 Z-up 米制坐标 · 不计算经纬度</footer>
+    <footer className="workspace-footer">本地米制竖直轴向上坐标 · 不计算经纬度</footer>
   </UiContainer>;
 };

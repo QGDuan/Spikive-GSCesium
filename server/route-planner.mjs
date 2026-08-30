@@ -308,7 +308,7 @@ export const planMission = ({ startLabel, labels, profile, collision }) => {
   if (unresolved) return { valid: false, waypoints: [], error: `标签“${unresolved.title}”缺少可靠表面法向。` };
   if (!startLabel.resolved || !startLabel.normal) return { valid: false, waypoints: [], error: `起点“${startLabel.title}”缺少可靠起飞法向。` };
   const start = chooseTakeoffPoint(startLabel, profile, collision);
-  if (!start) return { valid: false, waypoints: [], error: `起点“${startLabel.title}”沿法向 ${TAKEOFF_HEIGHT_METERS.toFixed(1)} m 的起飞位置或通道被占用。` };
+  if (!start) return { valid: false, waypoints: [], error: `起点“${startLabel.title}”沿法向 ${TAKEOFF_HEIGHT_METERS.toFixed(1)} 米的起飞位置或通道被占用。` };
   const targets = [];
   let previous = start;
   for (const label of labels) {

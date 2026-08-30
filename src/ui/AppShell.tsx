@@ -23,9 +23,11 @@ export type {
 } from './contracts';
 export { LABEL_TYPES } from './contracts';
 
+const PRODUCT_TITLE = '面向建运一体化转型的实景三维多场景孪生应用底座系统';
+
 export const AppShell = (props: AppShellProps) => <>
   <nav className="top-nav" aria-label="主导航">
-    <div className="brand"><span className="brand-mark">S</span><span>SPIKIVE <em>GS</em></span></div>
+    <div className="brand" title={PRODUCT_TITLE}><span className="brand-title">{PRODUCT_TITLE}</span></div>
     <div className="nav-tabs" aria-label="工作区">
       <button type="button" aria-current={props.activeTab === 'scenes' ? 'page' : undefined} className={props.activeTab === 'scenes' ? 'is-active' : ''} onClick={() => props.onTab('scenes')}><Icon name="database"/><span>场景</span></button>
       <button type="button" aria-current={props.activeTab === 'labels' ? 'page' : undefined} className={props.activeTab === 'labels' ? 'is-active' : ''} onClick={() => props.onTab('labels')}><Icon name="tag"/><span>标签</span></button>

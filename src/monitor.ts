@@ -1,4 +1,5 @@
 import type { GsViewer } from './viewer';
+import { formatBackend } from './ui/format';
 
 interface SystemMetrics {
   cpu: {
@@ -23,7 +24,7 @@ const formatBytes = (value: number | null | undefined) => {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return '不可用';
   }
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  const units = ['字节', '千字节', '兆字节', '吉字节', '太字节'];
   let current = value;
   let unit = 0;
   while (current >= 1024 && unit < units.length - 1) {
@@ -49,11 +50,11 @@ export const startMonitor = (viewer: GsViewer) => {
 
   const updateRenderer = () => {
     const metrics = viewer.getMetrics();
-    set('backend', metrics.backend);
-    set('fps', `${metrics.fps.toFixed(0)} FPS`);
-    set('frame', `${metrics.frameMs.toFixed(1)} ms`);
-    set('app-cpu', metrics.applicationCpuMs === null ? '当前构建不可用' : `${metrics.applicationCpuMs.toFixed(2)} ms/帧`);
-    set('gpu-time', metrics.gpuFrameMs === null ? '设备不支持时间戳' : `${metrics.gpuFrameMs.toFixed(2)} ms/帧`);
+    set('backend', formatBackend(metrics.backend));
+    set('fps', `${metrics.fps.toFixed(0)} 帧/秒`);
+    set('frame', `${metrics.frameMs.toFixed(1)} 毫秒`);
+    set('app-cpu', metrics.applicationCpuMs === null ? '当前构建不可用' : `${metrics.applicationCpuMs.toFixed(2)} 毫秒/帧`);
+    set('gpu-time', metrics.gpuFrameMs === null ? '设备不支持时间戳' : `${metrics.gpuFrameMs.toFixed(2)} 毫秒/帧`);
     set('engine-vram', `${formatBytes(metrics.engineGpuBytes)}（引擎估算）`);
     set('gaussians', metrics.visibleGaussians.toLocaleString('zh-CN'));
     set('draw-calls', String(metrics.drawCalls));
@@ -85,7 +86,7 @@ export const startMonitor = (viewer: GsViewer) => {
         signal: requestController.signal
       });
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw new Error(`服务状态码 ${response.status}`);
       }
       systemMetrics = (await response.json()) as SystemMetrics;
       updateRenderer();

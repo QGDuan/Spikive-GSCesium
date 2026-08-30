@@ -12,12 +12,15 @@ export const getSogWorkerCount = () =>
   Math.max(1, Math.min(MAX_SOG_WORKERS, availableParallelism() - 1));
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
-export const projectRoot = resolve(moduleDirectory, '..');
-const cliPath = resolve(projectRoot, 'node_modules/@playcanvas/splat-transform/bin/cli.mjs');
+export const projectRoot = resolve(process.env.SPIKIVE_APP_ROOT || resolve(moduleDirectory, '..'));
+const cliPath = resolve(
+  process.env.SPIKIVE_SPLAT_CLI ||
+  resolve(projectRoot, 'node_modules/@playcanvas/splat-transform/bin/cli.mjs')
+);
 
 export const createLodRatios = (levelCount = 5) => {
   if (!Number.isInteger(levelCount) || levelCount < MIN_LOD_LEVELS || levelCount > MAX_LOD_LEVELS) {
-    throw new RangeError(`LOD 层数必须是 ${MIN_LOD_LEVELS}–${MAX_LOD_LEVELS} 的整数。`);
+    throw new RangeError(`切片层数必须是 ${MIN_LOD_LEVELS}–${MAX_LOD_LEVELS} 的整数。`);
   }
 
   return Array.from({ length: levelCount }, (_, index) =>
@@ -59,8 +62,9 @@ export const runSplatTransform = async (args, { cwd = projectRoot, onLog, onChil
         resolveRun();
         return;
       }
-      const detail = logTail.length > 0 ? `\n${logTail.join('\n')}` : '';
-      rejectRun(new Error(`splat-transform 失败：code=${code ?? 'null'}, signal=${signal ?? 'null'}${detail}`));
+      const failure = new Error(`官方转换程序失败：退出码 ${code ?? '未知'}，终止信号 ${signal ?? '无'}。`);
+      if (logTail.length > 0) failure.cause = new Error(logTail.join('\n'));
+      rejectRun(failure);
     });
   });
 };
@@ -86,7 +90,7 @@ export const buildOfficialSog = async ({
     const levelPath = resolve(workDirectory, `lod-${index}-${ratio}.ply`);
     onProgress?.({
       progress: Math.floor((index / ratios.length) * 80),
-      stage: `正在生成 LOD${index}（${ratio}%）`
+      stage: `正在生成第 ${index} 层（${ratio}%）`
     });
     await runSplatTransform([source, '--decimate', `${ratio}%`, levelPath], {
       onLog,
@@ -95,7 +99,7 @@ export const buildOfficialSog = async ({
     generatedLevels.push({ lod: index, ratio, path: levelPath });
   }
 
-  onProgress?.({ progress: 85, stage: '正在生成官方 Streamed SOG' });
+  onProgress?.({ progress: 85, stage: '正在生成官方流式切片' });
   const tagArguments = ['--max-workers', String(workerCount), source, '--tag-lod', '0'];
   for (const level of generatedLevels) {
     tagArguments.push(level.path, '--tag-lod', String(level.lod));
@@ -109,12 +113,12 @@ export const buildOfficialSog = async ({
 
 const assertInside = (root, relativePath) => {
   if (typeof relativePath !== 'string' || !relativePath || relativePath.includes('\0')) {
-    throw new Error('SOG 产物包含无效文件路径。');
+    throw new Error('切片产物包含无效文件路径。');
   }
   const absoluteRoot = resolve(root);
   const absolutePath = resolve(absoluteRoot, relativePath);
   if (absolutePath !== absoluteRoot && !absolutePath.startsWith(`${absoluteRoot}${sep}`)) {
-    throw new Error(`SOG 产物路径越界：${relativePath}`);
+    throw new Error(`切片产物路径越界：${relativePath}`);
   }
   return absolutePath;
 };
@@ -152,39 +156,39 @@ export const validateSogArtifact = async (outputDirectory, expectedLevels) => {
   const metaPath = resolve(outputDirectory, 'lod-meta.json');
   const meta = JSON.parse(await readFile(metaPath, 'utf8'));
   if (meta.lodLevels !== expectedLevels) {
-    throw new Error(`SOG 层数不一致：期望 ${expectedLevels}，实际 ${meta.lodLevels}`);
+    throw new Error(`切片层数不一致：期望 ${expectedLevels}，实际 ${meta.lodLevels}`);
   }
   if (!Array.isArray(meta.counts) || meta.counts.length !== expectedLevels) {
-    throw new Error('SOG counts 与层数不一致。');
+    throw new Error('切片数量表与层数不一致。');
   }
   for (let index = 0; index < meta.counts.length; index += 1) {
     const count = meta.counts[index];
     if (!Number.isInteger(count) || count <= 0) {
-      throw new Error(`LOD${index} Gaussian 数量无效。`);
+      throw new Error(`第 ${index} 层高斯点数量无效。`);
     }
     if (index > 0 && count > meta.counts[index - 1]) {
-      throw new Error(`LOD${index} Gaussian 数量未保持单调递减。`);
+      throw new Error(`第 ${index} 层高斯点数量未保持单调递减。`);
     }
   }
   if (meta.count !== meta.counts.reduce((sum, count) => sum + count, 0)) {
-    throw new Error('SOG 总 Gaussian 数与分层统计不一致。');
+    throw new Error('切片高斯点总数与分层统计不一致。');
   }
   if (!Array.isArray(meta.filenames) || meta.filenames.length === 0) {
-    throw new Error('SOG 未生成空间 Chunk。');
+    throw new Error('切片未生成空间数据块。');
   }
 
   for (const filename of meta.filenames) {
     const chunkMetaPath = assertInside(outputDirectory, filename);
     const chunkMeta = JSON.parse(await readFile(chunkMetaPath, 'utf8'));
     if (!Number.isInteger(chunkMeta.count) || chunkMeta.count <= 0) {
-      throw new Error(`Chunk 数量无效：${filename}`);
+      throw new Error(`数据块数量无效：${filename}`);
     }
     const chunkDirectory = dirname(chunkMetaPath);
     for (const payload of collectPayloadFiles(chunkMeta)) {
       const payloadPath = assertInside(chunkDirectory, payload);
       const payloadStats = await stat(payloadPath);
       if (!payloadStats.isFile() || payloadStats.size === 0) {
-        throw new Error(`Chunk 数据文件为空：${payload}`);
+        throw new Error(`数据块文件为空：${payload}`);
       }
     }
   }

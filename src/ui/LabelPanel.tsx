@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { AppShellProps, LabelMetadata, PendingSelection } from './contracts';
 import { LABEL_TYPES } from './contracts';
-import { shortRevision } from './format';
 import { Button, EmptyState, Icon, SectionHeading, UiContainer } from './primitives';
 
 const LabelEditor = ({ initial, creating, selection, startTypeAvailable, onCancel, onSave }: {
@@ -34,11 +33,11 @@ export const LabelPanel = (props: AppShellProps) => {
   const dataset = props.datasets.find((item) => item.id === props.selectedDatasetId);
   const sceneReady = Boolean(dataset && !dataset.builtin && dataset.visual && props.loadedRevision.startsWith(`${dataset.id}:`));
   return <UiContainer variant="panel" className="workspace-panel" aria-label="标签管理">
-    <header className="workspace-header"><div><span className="overline">INSPECTION LABELS</span><h1>标签管理</h1></div><span className="header-count">{props.labelTotal}</span></header>
+    <header className="workspace-header"><div><h1>标签管理</h1></div><span className="header-count">{props.labelTotal}</span></header>
     <div className="workspace-scroll">
-      <UiContainer as="div" variant="subtle" className={`scene-binding${sceneReady ? ' is-ready' : ''}`}><Icon name="database"/><span><small>当前场景</small><strong>{dataset?.name ?? '尚未加载场景'}</strong></span>{dataset?.visual && <code>{shortRevision(dataset.activeVisualRevision)}</code>}</UiContainer>
+      <UiContainer as="div" variant="subtle" className={`scene-binding${sceneReady ? ' is-ready' : ''}`}><Icon name="database"/><span><small>当前场景</small><strong>{dataset?.name ?? '尚未加载场景'}</strong></span></UiContainer>
       {!sceneReady && <p className="binding-help">请先到“场景”页查看一个已切片的自定义场景。</p>}
-      <Button tone={props.picking ? 'active' : 'primary'} icon={props.picking ? 'close' : 'plus'} aria-pressed={props.picking} disabled={!sceneReady} onClick={props.picking ? props.onCancelPick : props.onStartPick}>{props.picking ? '取消 5px 圆选' : '在当前场景新建标签'}</Button>
+      <Button tone={props.picking ? 'active' : 'primary'} icon={props.picking ? 'close' : 'plus'} aria-pressed={props.picking} disabled={!sceneReady} onClick={props.picking ? props.onCancelPick : props.onStartPick}>{props.picking ? '取消 5 像素圆选' : '在当前场景新建标签'}</Button>
       <div className="filter-block">
         <form className="search-control" onSubmit={(event) => { event.preventDefault(); props.onLabelFilter(props.labelFilterType, query.trim()); }}><Icon name="search"/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或说明"/><button type="submit">查询</button></form>
         <div className="filter-chips"><button type="button" aria-pressed={!props.labelFilterType} className={!props.labelFilterType ? 'is-active' : ''} onClick={() => props.onLabelFilter(undefined, query.trim())}>全部</button>{LABEL_TYPES.map((type) => <button type="button" key={type} aria-pressed={props.labelFilterType === type} className={props.labelFilterType === type ? 'is-active' : ''} onClick={() => props.onLabelFilter(type, query.trim())}>{type.replace('巡检点', '巡检')}</button>)}</div>
@@ -68,7 +67,7 @@ export const InspectionCard = (props: AppShellProps) => {
       : <section className="label-detail">
         <div className="label-detail__head"><div><span>{label.type}</span><h2>{label.title}</h2></div><div className="card-head-actions"><Button size="compact" icon="edit" onClick={() => setEditing(true)}>编辑</Button><Button size="compact" tone="ghost" icon="close" aria-label="关闭巡检点卡片" onClick={props.onClearLabelSelection}>关闭</Button></div></div>
         {label.description && <p>{label.description}</p>}
-        <dl><div><dt>坐标 / m</dt><dd>{label.position.x.toFixed(3)}, {label.position.y.toFixed(3)}, {label.position.z.toFixed(3)}</dd></div><div><dt>法向</dt><dd>{label.normal ? `${label.normal.x.toFixed(4)}, ${label.normal.y.toFixed(4)}, ${label.normal.z.toFixed(4)}` : '—'}</dd></div><div><dt>拟合邻域</dt><dd>{label.neighborCount?.toLocaleString('zh-CN') ?? '—'} 个前表面采样 · {label.selectionRadiusPixels ?? 5}px</dd></div></dl>
+        <dl><div><dt>坐标（米）</dt><dd>{label.position.x.toFixed(3)}, {label.position.y.toFixed(3)}, {label.position.z.toFixed(3)}</dd></div><div><dt>法向</dt><dd>{label.normal ? `${label.normal.x.toFixed(4)}, ${label.normal.y.toFixed(4)}, ${label.normal.z.toFixed(4)}` : '—'}</dd></div><div><dt>拟合邻域</dt><dd>{label.neighborCount?.toLocaleString('zh-CN') ?? '—'} 个前表面采样 · {label.selectionRadiusPixels ?? 5} 像素</dd></div></dl>
         {confirmDelete ? <div className="inline-confirm"><span>{label.inUse ? '标签正在被任务使用' : '删除后不可恢复'}</span><Button size="compact" onClick={() => setConfirmDelete(false)}>取消</Button><Button size="compact" tone="danger" disabled={label.inUse} onClick={() => props.onDeleteLabel(label.id)}>确认删除</Button></div>
           : <Button icon="trash" tone="ghost" disabled={label.inUse} onClick={() => setConfirmDelete(true)}>{label.inUse ? `被 ${label.usageCount} 处引用` : '删除标签'}</Button>}
       </section>}

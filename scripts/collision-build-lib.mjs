@@ -70,7 +70,7 @@ const validateGlb = async (path) => {
     const { bytesRead } = await handle.read(header, 0, header.length, 0);
     if (bytesRead !== header.length || header.toString('ascii', 0, 4) !== 'glTF' ||
         header.readUInt32LE(4) !== 2 || header.readUInt32LE(8) !== stats.size) {
-      throw new Error('体素调试网格不是有效的 GLB 2.0 文件。');
+    throw new Error('体素调试网格不是有效的二进制三维网格文件。');
     }
   } finally {
     await handle.close();
@@ -157,8 +157,8 @@ const progressForLine = (line) => {
   if (normalized.includes('writing')) return { progress: 92, stage: '正在写入稀疏八叉树' };
   if (normalized.includes('cropping')) return { progress: 84, stage: '正在裁剪空体素边界' };
   if (normalized.includes('filtering')) return { progress: 72, stage: '正在整理体素块' };
-  if (normalized.includes('voxelizing')) return { progress: 48, stage: '正在进行 GPU 并行体素化' };
-  if (normalized.includes('building bvh')) return { progress: 18, stage: '正在构建 Gaussian BVH' };
+  if (normalized.includes('voxelizing')) return { progress: 48, stage: '正在进行图形处理器并行体素化' };
+  if (normalized.includes('building bvh')) return { progress: 18, stage: '正在构建高斯点包围体层次' };
   if (normalized.includes('build voxels')) return { progress: 10, stage: '正在准备体素计算' };
   return undefined;
 };
@@ -176,7 +176,7 @@ export const buildOfficialCollision = async ({
   await mkdir(outputDirectory, { recursive: true });
   const output = resolve(outputDirectory, 'scene.voxel.json');
 
-  onProgress?.({ progress: 3, stage: '正在启动官方 GPU 体素化' });
+  onProgress?.({ progress: 3, stage: '正在启动官方图形处理器体素化' });
   await runSplatTransform(
     createCollisionArguments(source, output, options),
     {

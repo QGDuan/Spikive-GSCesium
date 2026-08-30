@@ -16,7 +16,6 @@ import { extname, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { createServer as createViteServer } from 'vite';
 import {
   buildOfficialSog,
   createLodRatios,
@@ -40,10 +39,11 @@ import {
 
 const production = process.argv.includes('--production');
 const port = Number(process.env.SPIKIVE_PORT || 5173);
-const datasetsRoot = resolve(projectRoot, 'var/local-datasets');
-const labelDatabasePath = resolve(projectRoot, 'var/labels.sqlite');
-const publicRoot = resolve(projectRoot, 'public');
-const distRoot = resolve(projectRoot, 'dist');
+const dataRoot = resolve(process.env.SPIKIVE_DATA_ROOT || resolve(projectRoot, 'var'));
+const datasetsRoot = resolve(dataRoot, 'local-datasets');
+const labelDatabasePath = resolve(dataRoot, 'labels.sqlite');
+const publicRoot = resolve(process.env.SPIKIVE_PUBLIC_ROOT || resolve(projectRoot, 'public'));
+const distRoot = resolve(process.env.SPIKIVE_DIST_ROOT || resolve(projectRoot, 'dist'));
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const REVISION_PATTERN = /^[0-9A-Za-z_-]+$/;
 const FIXED_SELECTION_RADIUS_PIXELS = 5;
@@ -65,7 +65,7 @@ const voxelRepository = new VoxelWorldRepository(2 * 1024 ** 3, {
 
 const datasetDirectory = (id) => {
   if (!UUID_PATTERN.test(id)) {
-    throw Object.assign(new Error('数据集 ID 无效。'), { statusCode: 400 });
+    throw Object.assign(new Error('数据集编号无效。'), { statusCode: 400 });
   }
   return resolve(datasetsRoot, id);
 };
@@ -95,7 +95,7 @@ const readJsonBody = async (request, maxBytes = 64 * 1024) => {
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
   } catch {
-    throw Object.assign(new Error('JSON 请求格式无效。'), { statusCode: 400 });
+    throw Object.assign(new Error('请求内容格式无效。'), { statusCode: 400 });
   }
 };
 
@@ -142,7 +142,7 @@ const parseVector = (value, name) => {
 const parseSelectionRadius = (value) => {
   const radius = Number(value);
   if (radius !== FIXED_SELECTION_RADIUS_PIXELS) {
-    throw Object.assign(new Error(`巡检点圆形选择半径固定为 ${FIXED_SELECTION_RADIUS_PIXELS}px。`), { statusCode: 400 });
+    throw Object.assign(new Error(`巡检点圆形选择半径固定为 ${FIXED_SELECTION_RADIUS_PIXELS} 像素。`), { statusCode: 400 });
   }
   return FIXED_SELECTION_RADIUS_PIXELS;
 };
@@ -188,7 +188,7 @@ const parseMissionProfile = (value) => {
 
 const getMissionOrThrow = (id) => {
   if (!UUID_PATTERN.test(id)) {
-    throw Object.assign(new Error('航线 ID 无效。'), { statusCode: 400 });
+    throw Object.assign(new Error('航线编号无效。'), { statusCode: 400 });
   }
   const mission = missionStore.get(id);
   if (!mission) throw Object.assign(new Error('航线不存在。'), { statusCode: 404 });
@@ -208,7 +208,7 @@ const validateMissionInput = (dataset, input) => {
     throw Object.assign(new Error('航线至少需要一个巡检标签。'), { statusCode: 400 });
   }
   if (labelIds.some((id) => !UUID_PATTERN.test(id)) || new Set(labelIds).size !== labelIds.length) {
-    throw Object.assign(new Error('巡检标签列表包含无效或重复 ID。'), { statusCode: 400 });
+    throw Object.assign(new Error('巡检标签列表包含无效或重复编号。'), { statusCode: 400 });
   }
   if (labelIds.includes(startLabelId)) {
     throw Object.assign(new Error('起点不能重复加入巡检标签序列。'), { statusCode: 400 });
@@ -286,7 +286,7 @@ const readBuiltInDataset = async () => {
       const meta = JSON.parse(await readFile(path, 'utf8'));
       return {
         id: 'builtin',
-        name: '内置 point_cloud',
+        name: '内置示例场景',
         status: 'ready',
         progress: 100,
         stage: '可视化就绪',
@@ -391,7 +391,7 @@ const runBuild = async (id) => {
     }
     const report = await validateSogArtifact(stagedOutputDirectory, dataset.lodLevels);
     if (report.counts[0] <= 0) {
-      throw new Error('LOD0 未保留有效 Gaussian。');
+      throw new Error('第零层未保留有效高斯点。');
     }
     await mkdir(resolve(directory, 'visual-revisions'), { recursive: true });
     await rename(stagedOutputDirectory, finalDirectory);
@@ -579,7 +579,7 @@ const streamUpload = async (request, dataset) => {
 
   dataset.status = 'uploaded';
   dataset.progress = 0;
-  dataset.stage = 'PLY 已上传，等待切片';
+  dataset.stage = '高斯点云文件已上传，等待切片';
   dataset.error = null;
   dataset.source = { bytes: receivedBytes, sha256: hash.digest('hex') };
   await writeDataset(dataset);
@@ -691,7 +691,7 @@ const sampleSystemMetrics = () => {
     gpu: {
       utilizationPercent: null,
       physicalVramUsedBytes: null,
-      reason: '浏览器与跨平台 Node.js API 不提供可靠的物理 GPU 利用率和显存占用。'
+      reason: '浏览器与跨平台服务端接口不提供可靠的物理图形处理器利用率和显存占用。'
     }
   };
 };
@@ -721,10 +721,10 @@ const handleApi = async (request, response, url) => {
     const expectedBytes = Number(body.size);
     const lodLevels = body.lodLevels === undefined ? 5 : Number(body.lodLevels);
     if (!name || name.length > 180 || !name.toLowerCase().endsWith('.ply')) {
-      throw Object.assign(new Error('请选择有效的 .ply 文件。'), { statusCode: 400 });
+      throw Object.assign(new Error('请选择有效的高斯点云文件。'), { statusCode: 400 });
     }
     if (!Number.isSafeInteger(expectedBytes) || expectedBytes <= 0) {
-      throw Object.assign(new Error('PLY 文件大小无效。'), { statusCode: 400 });
+      throw Object.assign(new Error('高斯点云文件大小无效。'), { statusCode: 400 });
     }
     const ratios = createLodRatios(lodLevels);
     const now = new Date().toISOString();
@@ -736,7 +736,7 @@ const handleApi = async (request, response, url) => {
       ratios,
       status: 'awaiting-upload',
       progress: 0,
-      stage: '等待上传 PLY',
+      stage: '等待上传高斯点云文件',
       error: null,
       activeVisualRevision: null,
       visual: null,
@@ -848,7 +848,7 @@ const handleApi = async (request, response, url) => {
       throw Object.assign(new Error('当前场景尚无可用体素，请先完成体素计算。'), { statusCode: 409 });
     }
     if (dataset.collision.sourceSha256 !== dataset.source?.sha256) {
-      throw Object.assign(new Error('体素数据与当前源 PLY 不一致，请重新计算体素。'), { statusCode: 409 });
+      throw Object.assign(new Error('体素数据与当前源高斯点云不一致，请重新计算体素。'), { statusCode: 409 });
     }
     const input = validateMissionInput(dataset, mission);
     const jsonPath = resolve(
@@ -926,7 +926,7 @@ const handleApi = async (request, response, url) => {
   if (request.method === 'GET' && labelSpatialMatch) {
     const dataset = await readDataset(labelSpatialMatch[1]);
     if (!['x', 'y', 'z', 'radius'].every((name) => url.searchParams.has(name))) {
-      throw Object.assign(new Error('空间查询缺少 x、y、z 或 radius。'), { statusCode: 400 });
+      throw Object.assign(new Error('空间查询缺少横坐标、纵坐标、竖坐标或半径。'), { statusCode: 400 });
     }
     const labels = labelStore.spatial(dataset.id, {
       x: Number(url.searchParams.get('x')),
@@ -959,26 +959,26 @@ const handleApi = async (request, response, url) => {
     if (body.visualRevision !== dataset.activeVisualRevision) {
       throw Object.assign(new Error('前表面选择结果不属于当前视觉版本，请重新选择。'), { statusCode: 409 });
     }
-    const position = parseVector(body.position, '可见 GS 表面点');
+    const position = parseVector(body.position, '可见高斯表面点');
     const normal = parseNormal(body.normal);
     const selectionRadiusPixels = parseSelectionRadius(body.selectionRadiusPixels);
     const neighborCount = Number(body.neighborCount);
     if (!Number.isInteger(neighborCount) || neighborCount < 3) {
-      throw Object.assign(new Error('5px 区域至少需要 3 个 GPU 前表面深度采样点。'), { statusCode: 400 });
+      throw Object.assign(new Error('5 像素区域至少需要 3 个图形处理器前表面深度采样点。'), { statusCode: 400 });
     }
     if (body.pickBackend !== SURFACE_PICK_BACKEND ||
         body.selectionDataSource !== SURFACE_SELECTION_DATA_SOURCE) {
-      throw Object.assign(new Error('巡检点必须来自 PlayCanvas 原生深度 Picker 的 5px Alpha 前表面选择。'), { statusCode: 400 });
+      throw Object.assign(new Error('巡检点必须来自原生深度选择器的 5 像素透明度前表面选择。'), { statusCode: 400 });
     }
     const eigenvalues = Array.isArray(body.normalEigenvalues)
       ? body.normalEigenvalues.slice(0, 3).map(Number)
       : [];
     if (eigenvalues.length !== 3 || !eigenvalues.every(Number.isFinite)) {
-      throw Object.assign(new Error('PCA 特征值无效。'), { statusCode: 400 });
+      throw Object.assign(new Error('主成分特征值无效。'), { statusCode: 400 });
     }
     const normalPlanarity = Number(body.normalPlanarity);
     if (!Number.isFinite(normalPlanarity) || normalPlanarity < 0 || normalPlanarity > 1) {
-      throw Object.assign(new Error('PCA 平面度无效。'), { statusCode: 400 });
+      throw Object.assign(new Error('主成分平面度无效。'), { statusCode: 400 });
     }
     const label = labelStore.create({
       id: randomUUID(),
@@ -1009,7 +1009,7 @@ const handleApi = async (request, response, url) => {
   if (labelMatch) {
     const labelId = labelMatch[1];
     if (!UUID_PATTERN.test(labelId)) {
-      throw Object.assign(new Error('巡检点 ID 无效。'), { statusCode: 400 });
+      throw Object.assign(new Error('巡检点编号无效。'), { statusCode: 400 });
     }
     const label = labelStore.get(labelId);
     if (!label) {
@@ -1037,7 +1037,7 @@ const handleApi = async (request, response, url) => {
     const [,, labelId] = labelDeleteMatch;
     const dataset = await readDataset(labelDeleteMatch[1]);
     if (!UUID_PATTERN.test(labelId)) {
-      throw Object.assign(new Error('巡检点 ID 无效。'), { statusCode: 400 });
+      throw Object.assign(new Error('巡检点编号无效。'), { statusCode: 400 });
     }
     const label = labelStore.get(labelId);
     if (!label || label.datasetId !== dataset.id) {
@@ -1175,7 +1175,7 @@ const migrateLegacyLabels = async () => {
   }
 };
 
-await mkdir(resolve(projectRoot, 'var'), { recursive: true });
+await mkdir(dataRoot, { recursive: true });
 await mkdir(datasetsRoot, { recursive: true });
 labelStore = new LabelStore(labelDatabasePath);
 missionStore = new MissionStore(labelStore.database);
@@ -1236,6 +1236,7 @@ const server = createServer(async (request, response) => {
 });
 
 if (!production) {
+  const { createServer: createViteServer } = await import('vite');
   vite = await createViteServer({
     appType: 'spa',
     server: { middlewareMode: true, hmr: { server } }
@@ -1244,8 +1245,12 @@ if (!production) {
   await access(resolve(distRoot, 'index.html'));
 }
 
-server.listen(port, '0.0.0.0', () => {
-  console.log(`Spikive GS 已启动：http://localhost:${port} (${production ? 'production' : 'development'})`);
+const host = process.env.SPIKIVE_HOST || '0.0.0.0';
+server.listen(port, host, () => {
+  const address = server.address();
+  const actualPort = typeof address === 'object' && address ? address.port : port;
+  const displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+  console.log(`面向建运一体化转型的实景三维多场景孪生应用底座系统已启动：http://${displayHost}:${actualPort}（${production ? '生产模式' : '开发模式'}）`);
 });
 
 const shutdown = async () => {

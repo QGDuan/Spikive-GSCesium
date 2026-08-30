@@ -114,7 +114,7 @@ export const createGaussianSurfaceSelection = (
 ): GaussianSurfaceSelection => {
   const points = uniqueFinitePoints(depthPoints);
   if (points.length < 3) {
-    throw new Error('5px 圆内至少需要 3 个由 PlayCanvas 深度 Picker 返回的前表面采样点。');
+    throw new Error('5 像素圆内至少需要 3 个由原生深度选择器返回的前表面采样点。');
   }
 
   const centroid = points.reduce(
