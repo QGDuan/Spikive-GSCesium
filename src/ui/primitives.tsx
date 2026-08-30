@@ -4,9 +4,10 @@ import {
   type HTMLAttributes,
   type ReactNode
 } from 'react';
+import type { WorkspaceTab } from './contracts';
 
 export type IconName = 'database' | 'tag' | 'refresh' | 'upload' | 'eye' | 'cube' |
-  'trash' | 'plus' | 'search' | 'pin' | 'edit' | 'close' | 'check' | 'route';
+  'trash' | 'plus' | 'search' | 'pin' | 'edit' | 'close' | 'check' | 'route' | 'collapse';
 
 export const cx = (...values: Array<string | false | null | undefined>) => values.filter(Boolean).join(' ');
 
@@ -25,7 +26,8 @@ export const Icon = ({ name }: { name: IconName }) => {
     edit: <><path d="m4 20 4.5-1 10-10-3.5-3.5-10 10Z"/><path d="m13.5 6.5 3.5 3.5"/></>,
     close: <path d="m6 6 12 12M18 6 6 18"/>,
     check: <path d="m5 12 4 4L19 6"/>,
-    route: <><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/><path d="M7 18h3a3 3 0 0 0 3-3V9a3 3 0 0 1 3-3h1"/></>
+    route: <><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/><path d="M7 18h3a3 3 0 0 0 3-3V9a3 3 0 0 1 3-3h1"/></>,
+    collapse: <path d="m7 10 5 5 5-5"/>
   };
   return <svg className="ui-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
 };
@@ -69,3 +71,27 @@ export const EmptyState = ({ icon, title, description, compact = false }: {
   description?: ReactNode;
   compact?: boolean;
 }) => <div className={cx('ui-empty', compact && 'ui-empty--compact')}><Icon name={icon}/><span>{title}</span>{description && <small>{description}</small>}</div>;
+
+export const CollapseButton = ({ collapsed, controls, label, onToggle }: {
+  collapsed: boolean;
+  controls: string;
+  label: string;
+  onToggle(): void;
+}) => <button type="button" className="ui-collapse-button" aria-controls={controls} aria-expanded={!collapsed} aria-label={collapsed ? `展开${label}` : `收起${label}`} title={collapsed ? `展开${label}` : `收起${label}`} onClick={onToggle}><Icon name="collapse"/></button>;
+
+const workspaceTabs: Array<{ id: WorkspaceTab; label: string; icon: IconName }> = [
+  { id: 'scenes', label: '场景管理', icon: 'database' },
+  { id: 'labels', label: '标签管理', icon: 'tag' },
+  { id: 'missions', label: '飞行路线', icon: 'route' }
+];
+
+export const WorkspaceHeader = ({ activeTab, collapsed, aside, onTab, onCollapse }: {
+  activeTab: WorkspaceTab;
+  collapsed: boolean;
+  aside?: ReactNode;
+  onTab(tab: WorkspaceTab): void;
+  onCollapse(): void;
+}) => <header className="workspace-header">
+  <nav className="workspace-tabs" aria-label="管理功能">{workspaceTabs.map((tab) => <button type="button" key={tab.id} aria-current={activeTab === tab.id ? 'page' : undefined} className={activeTab === tab.id ? 'is-active' : ''} onClick={() => onTab(tab.id)}><Icon name={tab.icon}/><span>{tab.label}</span></button>)}</nav>
+  <div className="workspace-header-actions">{aside}<CollapseButton collapsed={collapsed} controls="workspace-content" label="左侧卡片" onToggle={onCollapse}/></div>
+</header>;

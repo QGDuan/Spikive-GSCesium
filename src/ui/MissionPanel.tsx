@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { AppShellProps, FlightProfile, MissionInput } from './contracts';
-import { Button, EmptyState, Icon, SectionHeading, StatusMark, UiContainer } from './primitives';
+import type { FlightProfile, MissionInput, WorkspacePanelProps } from './contracts';
+import { Button, EmptyState, Icon, SectionHeading, StatusMark, UiContainer, WorkspaceHeader } from './primitives';
 
 const DEFAULT_PROFILE: FlightProfile = {
   speed: 3,
@@ -24,7 +24,7 @@ const statusInfo = (status: 'draft' | 'valid' | 'invalid') => status === 'valid'
     ? { state: 'error' as const, label: '规划失败' }
     : { state: 'idle' as const, label: '待规划' };
 
-export const MissionPanel = (props: AppShellProps) => {
+export const MissionPanel = (props: WorkspacePanelProps) => {
   const dataset = props.datasets.find((item) => item.id === props.selectedDatasetId);
   const ready = Boolean(dataset && !dataset.builtin && dataset.visual && props.loadedRevision.startsWith(`${dataset.id}:`));
   const start = props.missionLabels.find((label) => label.type === '起点') ??
@@ -54,8 +54,8 @@ export const MissionPanel = (props: AppShellProps) => {
   const canCreate = ready && Boolean(input.name && input.startLabelId && input.labelIds.length) &&
     profileValid && profile.maximumSpacing >= profile.minimumSpacing;
   return <UiContainer variant="panel" className="workspace-panel" aria-label="飞行路线规划">
-    <header className="workspace-header"><div><h1>飞行路线</h1></div><span className="header-count">{props.missions.length}</span></header>
-    <div className="workspace-scroll">
+    <WorkspaceHeader activeTab={props.activeTab} collapsed={props.workspaceCollapsed} onTab={props.onTab} onCollapse={props.onWorkspaceCollapse} aside={<span className="header-count">{props.missions.length}</span>}/>
+    <div id="workspace-content" className="workspace-scroll">
       <UiContainer as="div" variant="subtle" className={`scene-binding${ready ? ' is-ready' : ''}`}><Icon name="database"/><span><small>当前场景</small><strong>{dataset?.name ?? '尚未加载场景'}</strong></span></UiContainer>
       {!ready && <p className="binding-help">请先到“场景”页查看一个已切片的自定义场景。</p>}
       <UiContainer variant="subtle" className="mission-create">

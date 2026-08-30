@@ -11,7 +11,7 @@ UI 与三维系统保持清晰边界：React 负责场景、标签、状态、�
 ```text
 src/ui/contracts.ts        业务界面的类型与回调契约
 src/ui/theme.css           唯一设计令牌：颜色、字体、间距、圆角、阴影、尺寸、层级
-src/ui/primitives.tsx      通用原语：Button、UiContainer、Icon、StatusMark、SectionHeading、EmptyState
+src/ui/primitives.tsx      通用原语：Button、UiContainer、Icon、StatusMark、SectionHeading、EmptyState、WorkspaceHeader、CollapseButton
 src/ui/ScenePanel.tsx      场景导入、切片、体素和场景卡片
 src/ui/LabelPanel.tsx      标签列表、筛选、详情与编辑卡片
 src/ui/MissionPanel.tsx    场景绑定的航线创建、参数、规划与删除
@@ -39,7 +39,7 @@ src/styles.css             原语样式、业务排版与响应式布局，不�
 - 普通界面使用 `--ui-font-sans`，覆盖 macOS、Windows 和中文字体回退；
 - 坐标、版本、计数、文件大小和性能值使用 `--ui-font-mono`；
 - 字号只使用 caption、helper、label、body、title、heading 六级令牌，字重只使用 medium、semibold、heading、bold 四级令牌；
-- 页面标题不超过 heading，卡片标题不超过 title；
+- 顶部固定产品标题使用 heading，左侧管理标题直接由工作区导航承担，卡片标题不超过 title；
 - 辅助说明不能通过更亮颜色抢占主信息，只使用 secondary、muted 或 faint；
 - 禁止组件自行声明新的字体族和任意字号。
 
@@ -72,12 +72,12 @@ src/styles.css             原语样式、业务排版与响应式布局，不�
 
 ## 7. 页面和业务组织
 
-- 主导航内部标识固定为 `scenes | labels | missions`，界面统一称“场景”“标签”“航线”，不再混用“数据”作为页面名称；
+- 工作区导航内部标识固定为 `scenes | labels | missions`。三个入口直接位于左侧卡片标题区，显示为“场景管理”“标签管理”“飞行路线”，同时承担页面切换和当前页面标题，不再在顶部栏或卡片内重复标题；
 - 场景卡片只管理源 PLY、视觉切片、体素、显示状态和永久删除；
 - 标签页只读绑定当前成功加载的场景，不能在标签页切换所属场景；
 - 航线页同样只读绑定当前场景；起点、顺序标签、参数、规划和删除在独立页面管理，不塞回场景卡片；
 - 标签创建、列表与文本/类型筛选在左侧；草稿、选中详情和编辑在右上独立巡检点卡片；
-- 性能卡片固定在右下，只显示 FPS、可见 GS、系统 CPU、系统内存和 GPU 资源估算；WebGPU/WebGL2 位于顶部；
+- 性能卡片固定在右下，只显示 FPS、可见 GS、系统 CPU、系统内存和 GPU 资源估算；图形模式位于顶部；性能卡片可折叠为标题栏，但五个指标节点仍保留，监控采样不得因折叠启停；
 - 后端空间查询能力保留，但界面不显示“查询选中点周边”；
 - 所有删除操作都使用行内二次确认，不把永久删除混入可逆的显示开关。
 
@@ -86,7 +86,8 @@ src/styles.css             原语样式、业务排版与响应式布局，不�
 ## 8. 布局、输入与可访问性
 
 - React 根层必须 `pointer-events: none`，只有可见导航和卡片恢复指针事件，避免遮挡 PlayCanvas 视口；
-- 左侧工作区、右上巡检点和右下性能卡片使用统一布局令牌管理宽度与层级；
+- 左侧工作区、右上巡检点和右下性能卡片使用统一布局令牌管理宽度与层级；左侧工作区可折叠为导航标题栏，右下性能卡片可折叠为性能标题栏；
+- 折叠只改变可见布局，不卸载业务面板、不清空表单/筛选状态、不停止性能采样，也不改变三维输入、Renderer、数据库或后端计算；
 - 窄屏只重排和收紧容器，不复制一份移动端业务组件；
 - 粗指针设备提高控件最小高度；
 - 所有键盘焦点使用橙色轮廓；
@@ -110,4 +111,4 @@ src/styles.css             原语样式、业务排版与响应式布局，不�
 
 本次重构前存在以下问题：颜色、字体、圆角和容器外观散落在单一 CSS；场景、标签、性能和应用壳集中在一个大组件；同类按钮与空状态重复实现；可见名称已改为“场景”但内部仍使用 `data` 和 `dataset-card`。
 
-现已统一为主题令牌、基础原语、独立业务组件与轻量 AppShell；内部页签为 `scenes | labels | missions`，场景卡片类名统一为 `scene-card`。上传、切片、体素、显示、标签 CRUD/筛选/编辑、航线规划、性能监控和删除业务各自保持独立。
+现已统一为主题令牌、基础原语、独立业务组件与轻量 AppShell；内部页签为 `scenes | labels | missions`，三个页签与左侧卡片标题合并，并提供左侧工作区和右下性能卡片的纯显示折叠。场景卡片类名统一为 `scene-card`。上传、切片、体素、显示、标签 CRUD/筛选/编辑、航线规划、性能监控和删除业务各自保持独立。

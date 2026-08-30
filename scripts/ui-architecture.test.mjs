@@ -60,3 +60,20 @@ test('性能卡片只公开五项只读指标', () => {
   const metrics = [...source.matchAll(/data-metric="([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(metrics, ['fps', 'gaussians', 'system-cpu', 'system-memory', 'engine-vram']);
 });
+
+test('管理导航与标题合并且左右卡片折叠不移除业务节点', () => {
+  const shell = read('src/ui/AppShell.tsx');
+  const primitives = read('src/ui/primitives.tsx');
+  const performance = read('src/ui/PerformanceCard.tsx');
+  const styles = read('src/styles.css');
+  assert.doesNotMatch(shell, /className="nav-tabs"/);
+  assert.match(primitives, /label: '场景管理'/);
+  assert.match(primitives, /label: '标签管理'/);
+  assert.match(primitives, /label: '飞行路线'/);
+  assert.doesNotMatch([read('src/ui/ScenePanel.tsx'), read('src/ui/LabelPanel.tsx'), read('src/ui/MissionPanel.tsx')].join('\n'), /<h1\b/);
+  assert.match(shell, /workspaceCollapsed/);
+  assert.match(styles, /\.left-dock\.is-collapsed \.workspace-scroll/);
+  assert.match(performance, /CollapseButton/);
+  assert.match(performance, /id="performance-metrics"/);
+  assert.doesNotMatch(performance, /collapsed\s*&&\s*<div[^>]+metric-grid/);
+});

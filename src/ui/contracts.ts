@@ -174,3 +174,10 @@ export interface AppShellProps {
   onPlanMission(missionId: string): void;
   onDeleteMission(missionId: string): void;
 }
+
+export interface WorkspaceFrameProps {
+  workspaceCollapsed: boolean;
+  onWorkspaceCollapse(): void;
+}
+
+export type WorkspacePanelProps = AppShellProps & WorkspaceFrameProps;

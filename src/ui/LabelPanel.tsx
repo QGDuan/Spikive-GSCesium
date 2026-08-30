@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { AppShellProps, LabelMetadata, PendingSelection } from './contracts';
+import type { AppShellProps, LabelMetadata, PendingSelection, WorkspacePanelProps } from './contracts';
 import { LABEL_TYPES } from './contracts';
-import { Button, EmptyState, Icon, SectionHeading, UiContainer } from './primitives';
+import { Button, EmptyState, Icon, SectionHeading, UiContainer, WorkspaceHeader } from './primitives';
 
 const LabelEditor = ({ initial, creating, selection, startTypeAvailable, onCancel, onSave }: {
   initial: LabelMetadata;
@@ -27,14 +27,14 @@ const LabelEditor = ({ initial, creating, selection, startTypeAvailable, onCance
   </div>;
 };
 
-export const LabelPanel = (props: AppShellProps) => {
+export const LabelPanel = (props: WorkspacePanelProps) => {
   const [query, setQuery] = useState(props.labelFilterQuery);
   useEffect(() => setQuery(props.labelFilterQuery), [props.labelFilterQuery]);
   const dataset = props.datasets.find((item) => item.id === props.selectedDatasetId);
   const sceneReady = Boolean(dataset && !dataset.builtin && dataset.visual && props.loadedRevision.startsWith(`${dataset.id}:`));
   return <UiContainer variant="panel" className="workspace-panel" aria-label="标签管理">
-    <header className="workspace-header"><div><h1>标签管理</h1></div><span className="header-count">{props.labelTotal}</span></header>
-    <div className="workspace-scroll">
+    <WorkspaceHeader activeTab={props.activeTab} collapsed={props.workspaceCollapsed} onTab={props.onTab} onCollapse={props.onWorkspaceCollapse} aside={<span className="header-count">{props.labelTotal}</span>}/>
+    <div id="workspace-content" className="workspace-scroll">
       <UiContainer as="div" variant="subtle" className={`scene-binding${sceneReady ? ' is-ready' : ''}`}><Icon name="database"/><span><small>当前场景</small><strong>{dataset?.name ?? '尚未加载场景'}</strong></span></UiContainer>
       {!sceneReady && <p className="binding-help">请先到“场景”页查看一个已切片的自定义场景。</p>}
       <Button tone={props.picking ? 'active' : 'primary'} icon={props.picking ? 'close' : 'plus'} aria-pressed={props.picking} disabled={!sceneReady} onClick={props.picking ? props.onCancelPick : props.onStartPick}>{props.picking ? '取消 5 像素圆选' : '在当前场景新建标签'}</Button>

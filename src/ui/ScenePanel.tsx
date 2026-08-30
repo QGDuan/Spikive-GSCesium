@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AppShellProps, CardSettings, CollisionState, Dataset, DatasetAction } from './contracts';
+import type { CardSettings, CollisionState, Dataset, DatasetAction, WorkspacePanelProps } from './contracts';
 import { createRatios, formatBytes } from './format';
-import { Button, EmptyState, Icon, SectionHeading, StatusMark, UiContainer } from './primitives';
+import { Button, EmptyState, Icon, SectionHeading, StatusMark, UiContainer, WorkspaceHeader } from './primitives';
 
 const visualStatus = (dataset: Dataset) => dataset.status === 'building'
   ? { state: 'busy' as const, label: `切片 ${Math.round(dataset.progress)}%` }
@@ -71,7 +71,7 @@ const SceneCard = ({ dataset, selected, loaded, busy, settings, gaussianVisible,
   </UiContainer>;
 };
 
-export const ScenePanel = (props: AppShellProps) => {
+export const ScenePanel = (props: WorkspacePanelProps) => {
   const [file, setFile] = useState<File>();
   const [lodLevels, setLodLevels] = useState(5);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -81,8 +81,8 @@ export const ScenePanel = (props: AppShellProps) => {
     if (fileInput.current) fileInput.current.value = '';
   }, [props.upload.busy, props.upload.progress]);
   return <UiContainer variant="panel" className="workspace-panel" aria-label="场景管理">
-    <header className="workspace-header"><div><h1>场景管理</h1></div><Button size="compact" icon="refresh" tone="ghost" onClick={props.onReload} aria-label="刷新场景">刷新</Button></header>
-    <div className="workspace-scroll">
+    <WorkspaceHeader activeTab={props.activeTab} collapsed={props.workspaceCollapsed} onTab={props.onTab} onCollapse={props.onWorkspaceCollapse} aside={<Button size="compact" icon="refresh" tone="ghost" onClick={props.onReload} aria-label="刷新场景">刷新</Button>}/>
+    <div id="workspace-content" className="workspace-scroll">
       <UiContainer variant="subtle" className="import-block">
         <SectionHeading aside="第零层保留完整数据">导入高斯点云</SectionHeading>
         <label className="file-control">
