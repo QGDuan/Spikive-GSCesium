@@ -1211,7 +1211,8 @@ const server = createServer(async (request, response) => {
       throw Object.assign(new Error('静态资源路径越界。'), { statusCode: 400 });
     }
     try {
-      if (await serveFile(request, response, staticPath, 'no-cache')) {
+      const cacheControl = extname(staticPath).toLowerCase() === '.html' ? 'no-store' : 'no-cache';
+      if (await serveFile(request, response, staticPath, cacheControl)) {
         return;
       }
     } catch (error) {
@@ -1219,7 +1220,7 @@ const server = createServer(async (request, response) => {
         throw error;
       }
     }
-    await serveFile(request, response, resolve(distRoot, 'index.html'), 'no-cache');
+    await serveFile(request, response, resolve(distRoot, 'index.html'), 'no-store');
   } catch (error) {
     const statusCode = error?.statusCode || 500;
     if (statusCode >= 500) {

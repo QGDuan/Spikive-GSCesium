@@ -39,6 +39,7 @@ test('Web 部署同源提供前后端并隔离业务数据', async () => {
   assert.match(server, /process\.env\.SPIKIVE_DATA_ROOT/);
   assert.match(server, /process\.env\.SPIKIVE_HOST/);
   assert.match(server, /面向建运一体化转型的实景三维多场景孪生应用底座系统已启动/);
+  assert.match(server, /extname\(staticPath\)[\s\S]*?\.html'[\s\S]*?'no-store'/);
   assert.match(deployScript, /release', 'web'/);
   assert.match(deployScript, /\.spikive-gs\/data/);
   assert.match(deployScript, /LOCALAPPDATA/);

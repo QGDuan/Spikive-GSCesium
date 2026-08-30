@@ -1,7 +1,7 @@
 {
   "name": "spikive-gs-inspection",
   "productName": "面向建运一体化转型的实景三维多场景孪生应用底座系统",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "本地实景三维巡检与航线规划平台",
   "private": true,
   "type": "module",

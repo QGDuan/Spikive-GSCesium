@@ -70,7 +70,7 @@ shasum -a 256 -c SHA256SUMS.txt
 Windows PowerShell 可执行：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 '.\面向建运一体化转型的实景三维多场景孪生应用底座系统-0.1.0.zip'
+Get-FileHash -Algorithm SHA256 '.\面向建运一体化转型的实景三维多场景孪生应用底座系统-0.1.1.zip'
 ```
 
 输出值应与 `SHA256SUMS.txt` 一致。
