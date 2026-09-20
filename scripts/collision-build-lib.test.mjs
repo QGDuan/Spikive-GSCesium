@@ -42,15 +42,17 @@ test('官方 worker 数保持在安全的多核范围', () => {
   assert.ok(recommendedWorkerCount() <= 4);
 });
 
-test('官方体素命令固定生成 faces 调试网格', () => {
+test('官方体素命令默认只生成 SVO，调试网格显式按需启用', () => {
   assert.deepEqual(createCollisionArguments('/tmp/source.ply', '/tmp/scene.voxel.json'), [
     '--memory',
+    '--overwrite',
     '/tmp/source.ply',
     '--voxel-size', String(DEFAULT_VOXEL_SIZE),
     '--voxel-opacity', String(DEFAULT_VOXEL_OPACITY),
-    '--collision-mesh', 'faces',
     '/tmp/scene.voxel.json'
   ]);
+  const debug = createCollisionArguments('/tmp/source.ply', '/tmp/scene.voxel.json', {}, { debugMesh: true });
+  assert.equal(debug[debug.indexOf('--collision-mesh') + 1], 'faces');
 });
 
 test('校验官方 sparse voxel octree 文件闭环', async () => {
@@ -86,4 +88,17 @@ test('校验官方 sparse voxel octree 文件闭环', async () => {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('官方阈值计算后的零节点空树合法，缺失文件不合法', async () => {
+  const directory = await mkdtemp(resolve(tmpdir(), 'spikive-empty-voxel-'));
+  try {
+    const metadata = { version: '1.1', leafSize: 4, treeDepth: 1, voxelResolution: .2,
+      nodeCount: 0, leafDataCount: 0, numInteriorNodes: 0, numMixedLeaves: 0,
+      gridBounds: { min: [0,0,0], max: [1,1,1] }, sceneBounds: { min: [0,0,0], max: [1,1,1] } };
+    await writeFile(resolve(directory,'scene.voxel.json'),JSON.stringify(metadata));
+    await assert.rejects(validateCollisionArtifact(directory,{voxelSize:.2,voxelOpacity:.1}), /ENOENT/);
+    await writeFile(resolve(directory,'scene.voxel.bin'),Buffer.alloc(0));
+    assert.equal((await validateCollisionArtifact(directory,{voxelSize:.2,voxelOpacity:.1})).binaryBytes,0);
+  } finally { await rm(directory,{recursive:true,force:true}); }
 });

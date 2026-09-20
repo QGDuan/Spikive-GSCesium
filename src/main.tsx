@@ -85,6 +85,8 @@ let uploadState: AppShellProps['upload'] = { progress: 0, stage: '选择高斯�
 let pollTimer: number | undefined;
 let stopMonitor: (() => void) | undefined;
 let disposed = false;
+let suspendedScene: { id: string; camera: ReturnType<GsViewer['captureCamera']>; gaussian: boolean; voxel?: string } | undefined;
+let refreshPromise: Promise<void> | undefined;
 
 const clampInteger = (value: number, minimum: number, maximum: number, fallback: number) =>
   Number.isInteger(value) ? Math.max(minimum, Math.min(maximum, value)) : fallback;
@@ -218,8 +220,10 @@ const setStatus = (message: string, state: AppShellProps['status']['state'] = 'l
 
 const defaultCardSettings = (dataset: Dataset): CardSettings => ({
   lodLevels: dataset.lodLevels || 5,
-  voxelSize: dataset.collision.voxelSize || 0.2,
-  voxelOpacity: dataset.collision.voxelOpacity ?? 0.1
+  voxelSize: (dataset.pendingCollisionRevision ? dataset.collision.requestedOptions?.voxelSize : undefined) ?? dataset.collision.voxelSize ?? 0.2,
+  voxelOpacity: (dataset.pendingCollisionRevision ? dataset.collision.requestedOptions?.voxelOpacity : undefined) ?? dataset.collision.voxelOpacity ?? 0.1,
+  resourceProfile: dataset.resourceProfile ?? 'low-memory',
+  debugPartitionIndex: dataset.collision.debugMeshPartitionIndex ?? 0
 });
 
 const setSelectionCircleVisible = (visible: boolean) => {
@@ -330,12 +334,14 @@ const syncViewerInspectionPoints = (dataset: Dataset) => {
 };
 
 const loadDataset = async (dataset: Dataset) => {
+  if (activeTask) throw new Error('构建期间已释放三维场景，任务结束后自动恢复。');
   if (!dataset.visual) throw new Error(`${dataset.name} 尚未完成切片。`);
   const revisionKey = `${dataset.id}:${dataset.visual.revision}`;
   const contextChanged = selectedDatasetId !== dataset.id || loadedRevision !== revisionKey;
   if (loadedRevision !== revisionKey) {
     setStatus(`正在加载 ${dataset.name}…`);
     await viewer.load(dataset.visual.renderUrl, dataset.name);
+    if (activeTask || disposed) { viewer.clear(); return; }
     cameraMode = viewer.cameraMode;
     loadedRevision = revisionKey;
     displayedLabelSignature = '';
@@ -355,11 +361,22 @@ const loadDataset = async (dataset: Dataset) => {
   setStatus(`${dataset.name} · 第零层 ${count.toLocaleString('zh-CN')} 个高斯点 · 共 ${dataset.lodLevels} 层`, 'ready');
 };
 
-const refreshDatasets = async (autoLoad = false) => {
+const suspendDisplay = () => {
+  if (suspendedScene || !loadedRevision) return;
+  suspendedScene = { id: selectedDatasetId, camera: viewer.captureCamera(), gaussian: viewer.gaussianVisible, voxel: viewer.voxelDebugUrl };
+  cancelLabelPick();
+  viewer.clear();
+  loadedRevision = '';
+  displayedLabelSignature = '';
+  cameraMode = viewer.cameraMode;
+};
+
+const refreshDatasetsNow = async (autoLoad = false) => {
   const response = await requestJson<DatasetListResponse>('/api/datasets');
   datasets = response.datasets;
   activeTask = response.activeTask;
   workerCount = response.sogWorkerCount;
+  if (activeTask) suspendDisplay();
   const ids = new Set(datasets.map((dataset) => dataset.id));
   for (const id of labelsByDataset.keys()) if (!ids.has(id)) labelsByDataset.delete(id);
   for (const id of missionsByDataset.keys()) if (!ids.has(id)) missionsByDataset.delete(id);
@@ -391,7 +408,25 @@ const refreshDatasets = async (autoLoad = false) => {
   if (selected) syncViewerRoute(selected);
   if (selected) await refreshLabelPanel();
   else renderUi();
-  if (autoLoad && selected?.visual) await loadDataset(selected);
+  if (!activeTask && suspendedScene) {
+    const snapshot = suspendedScene;
+    suspendedScene = undefined;
+    const previous = datasets.find((item) => item.id === snapshot.id);
+    if (previous?.visual) {
+      await loadDataset(previous);
+      if (activeTask || disposed) return;
+      viewer.restoreCamera(snapshot.camera);
+      cameraMode = viewer.cameraMode;
+      viewer.setGaussianVisible(snapshot.gaussian);
+      if (snapshot.voxel && snapshot.voxel === previous.collision.debugMeshUrl) await viewer.toggleVoxelDebug(snapshot.voxel, previous.name);
+      renderUi();
+    }
+  } else if (!activeTask && autoLoad && selected?.visual) await loadDataset(selected);
+};
+
+const refreshDatasets = (autoLoad = false): Promise<void> => {
+  refreshPromise ??= refreshDatasetsNow(autoLoad).finally(() => { refreshPromise = undefined; });
+  return refreshPromise;
 };
 
 const uploadFile = (dataset: Dataset, file: File) => new Promise<void>((resolve, reject) => {
@@ -444,20 +479,30 @@ const handleDatasetAction = async (action: Parameters<AppShellProps['onDatasetAc
     cancelLabelPick();
     await loadDataset(dataset);
   } else if (action === 'build') {
+    suspendDisplay();
     await requestJson(`/api/datasets/${dataset.id}/build`, {
       method: 'POST',
-      body: JSON.stringify({ lodLevels: clampInteger(settings.lodLevels, 1, 20, dataset.lodLevels) })
+      body: JSON.stringify({ lodLevels: clampInteger(settings.lodLevels, 1, 20, dataset.lodLevels), resourceProfile: settings.resourceProfile })
     });
     setStatus(`${dataset.name} 已进入切片任务。`);
   } else if (action === 'collision') {
-    if (dataset.collision.status === 'ready' &&
+    if (dataset.collision.status === 'ready' && !dataset.pendingCollisionRevision &&
         !window.confirm(`重新计算“${dataset.name}”的体素？当前版本会保留到新版校验通过。`)) return;
-    if (selectedDatasetId === dataset.id) viewer.clearVoxelDebug();
+    suspendDisplay();
     await requestJson(`/api/datasets/${dataset.id}/collision/build`, {
       method: 'POST',
-      body: JSON.stringify({ voxelSize: settings.voxelSize, voxelOpacity: settings.voxelOpacity })
+      body: JSON.stringify({ voxelSize: settings.voxelSize, voxelOpacity: settings.voxelOpacity, resourceProfile: settings.resourceProfile })
     });
-    setStatus(`${dataset.name} 已进入图形处理器并行体素任务。`);
+    setStatus(`${dataset.name} 已进入分区体素任务，各分区依次计算。`);
+  } else if (action === 'cancel') {
+    await requestJson(`/api/datasets/${dataset.id}/tasks/cancel`, { method: 'POST' });
+    setStatus('正在取消，已完成并校验的阶段会保留。');
+  } else if (action === 'debug') {
+    suspendDisplay();
+    await requestJson(`/api/datasets/${dataset.id}/collision/debug-mesh/build`, {
+      method: 'POST', body: JSON.stringify({ partitionIndex: settings.debugPartitionIndex })
+    });
+    setStatus('正在按需生成调试网格，不改变碰撞、标签或航线版本。');
   } else if (action === 'display-gs') {
     const sceneWasLoaded = loadedRevision.startsWith(`${dataset.id}:`);
     const visible = sceneWasLoaded ? !viewer.gaussianVisible : true;
@@ -468,17 +513,7 @@ const handleDatasetAction = async (action: Parameters<AppShellProps['onDatasetAc
     const debugMeshUrl = dataset.collision.debugMeshUrl;
     if (!debugMeshUrl) {
       if (dataset.collision.status !== 'ready') throw new Error('请先完成体素计算。');
-      if (!window.confirm(
-        `“${dataset.name}”的旧体素版本没有调试网格。是否使用当前 ${settings.voxelSize} 米 / ` +
-        `透明度 ${settings.voxelOpacity} 参数重新生成？系统不会自动改参，旧版本会保留到新版本校验通过。`
-      )) return;
-      await requestJson(`/api/datasets/${dataset.id}/collision/build`, {
-        method: 'POST',
-        body: JSON.stringify({ voxelSize: settings.voxelSize, voxelOpacity: settings.voxelOpacity })
-      });
-      setStatus(`${dataset.name} 已按当前参数进入体素调试网格生成任务。`);
-      await refreshDatasets();
-      return;
+      return handleDatasetAction('debug', datasetId);
     }
     const alreadyVisible = viewer.voxelDebugUrl === debugMeshUrl;
     if (!alreadyVisible && (dataset.collision.debugMeshBytes ?? 0) >= 256 * 1024 ** 2 &&
@@ -688,6 +723,7 @@ const onPointerUp = async (event: PointerEvent) => {
     markerPickInFlight = true;
     try {
       const labelId = await viewer.pickInspectionPoint(event.clientX, event.clientY);
+      if (activeTask || disposed || !loadedRevision.startsWith(`${dataset.id}:`)) return;
       if (labelId) await selectInspectionLabel(labelId, true);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error), 'error');
@@ -703,6 +739,7 @@ const onPointerUp = async (event: PointerEvent) => {
   setStatus(`正在用固定 ${FIXED_CIRCLE_RADIUS_PIXELS} 像素区域读取透明度可见前表面…`);
   try {
     const selection = await viewer.pickGaussianSurface(event.clientX, event.clientY);
+    if (activeTask || disposed || pickingDatasetId !== dataset.id || !loadedRevision.startsWith(`${dataset.id}:`)) return;
     if (!selection) throw new Error('点击位置没有可选的高斯点，请贴近目标后重新选择。');
     pendingLabelSelection = selection;
     cancelLabelPick();

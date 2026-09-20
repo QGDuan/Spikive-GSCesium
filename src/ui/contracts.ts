@@ -18,6 +18,11 @@ export interface CollisionState {
   bytes?: number;
   debugMeshUrl?: string;
   debugMeshBytes?: number;
+  debugMeshStatus?: 'not-built' | 'building' | 'ready' | 'failed';
+  debugMeshError?: string | null;
+  debugMeshPartitionIndex?: number;
+  partitionCount?: number;
+  requestedOptions?: { voxelSize: number; voxelOpacity: number };
 }
 
 export interface Dataset {
@@ -27,6 +32,11 @@ export interface Dataset {
   progress: number;
   stage: string;
   error?: string | null;
+  resourceProfile?: 'low-memory' | 'standard';
+  pendingVisualRevision?: string | null;
+  pendingCollisionRevision?: string | null;
+  visualLogUrl?: string;
+  collisionLogUrl?: string;
   lodLevels: number;
   ratios: number[];
   source?: { bytes: number; sha256: string };
@@ -130,16 +140,18 @@ export interface CardSettings {
   lodLevels: number;
   voxelSize: number;
   voxelOpacity: number;
+  resourceProfile: 'low-memory' | 'standard';
+  debugPartitionIndex: number;
 }
 
-export type DatasetAction = 'view' | 'build' | 'collision' | 'display-gs' | 'display-voxel' | 'delete';
+export type DatasetAction = 'view' | 'build' | 'collision' | 'display-gs' | 'display-voxel' | 'delete' | 'cancel' | 'debug';
 
 export interface AppShellProps {
   activeTab: WorkspaceTab;
   cameraMode: CameraMode;
   datasets: Dataset[];
   selectedDatasetId: string;
-  activeTask: { type: 'visual' | 'collision'; datasetId: string } | null;
+  activeTask: { type: 'visual' | 'collision' | 'debug'; datasetId: string } | null;
   workerCount: number;
   cardSettings: Record<string, CardSettings>;
   loadedRevision: string;

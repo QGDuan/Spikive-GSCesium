@@ -1,6 +1,6 @@
 # 面向建运一体化转型的实景三维多场景孪生应用底座系统
 
-当前 `dev` 版本只使用一个 PlayCanvas Renderer。用户可以上传 Gaussian Splatting PLY，通过场景卡片完成首次切片、查看、体素碰撞计算/重新计算和永久删除。
+当前 `test` 分支实现低资源构建，`main` 保留优化前稳定版。两者都只使用一个 PlayCanvas Renderer。用户可以上传 Gaussian Splatting PLY，通过场景卡片完成首次切片、查看、体素碰撞计算/重新计算和永久删除。
 
 系统只保存和使用 PLY 的本地 Z-up 米制工程坐标，不计算经纬度，也不引入 Cesium、AHoLo 或第二个 GPU 上下文。
 
@@ -14,6 +14,7 @@
 - React UI 设计系统、容器原语与后续开发规范：[`docs/UI_SYSTEM.md`](docs/UI_SYSTEM.md)。
 - 飞行路线、观察节点、SVO 膨胀避障与数据库闭环：[`docs/FLIGHT_ROUTE_PLANNING.md`](docs/FLIGHT_ROUTE_PLANNING.md)。
 - Web 前后端生产构建、服务器启动与数据备份：[`docs/WEB_DEPLOYMENT.md`](docs/WEB_DEPLOYMENT.md)。
+- 低资源构建原理与实测记录：[`docs/LOW_RESOURCE_BUILD.md`](docs/LOW_RESOURCE_BUILD.md)、[`docs/LOW_RESOURCE_ACCEPTANCE.md`](docs/LOW_RESOURCE_ACCEPTANCE.md)。
 
 系统以 Web 方式部署：后端同时提供 API、前端静态资源与版本化场景数据，浏览器通过同一地址访问，不需要 Electron 或桌面安装器。
 
@@ -33,7 +34,7 @@ npm install
 项目固定使用：
 
 - `playcanvas@2.21.4`
-- `@playcanvas/splat-transform@3.3.0`
+- `@playcanvas/splat-transform@3.4.2`（本 `test` 分支）
 - `react@19.2.8` / `react-dom@19.2.8`
 
 ## 2. 如何启动
@@ -95,7 +96,9 @@ npm run dev
 - 6 层：`100% / 84% / 67% / 50% / 34% / 17%`
 - 10 层：`100% / 90% / 80% / 70% / 60% / 50% / 40% / 30% / 20% / 10%`
 
-LOD0 直接使用完整源 PLY，不执行抽稀。其余层串行调用官方 `splat-transform --decimate`，最终只通过官方 `--tag-lod` 生成 Streamed SOG。SOG 编码显式启用官方 worker pool，线程数为 `min(4, CPU 逻辑核数 - 1)`；单个任务内部多核工作，但重任务之间保持串行，避免多个大场景同时争用内存。
+LOD0 直接使用完整源 PLY，不执行抽稀，发布前核对点数。其余层串行调用官方 `splat-transform --decimate`，最终只通过官方 `--tag-lod` 生成 Streamed SOG。本分支固定转换器 `3.4.2`，前端仍为 `2.21.4`。新任务默认“低资源”：官方 CPU 计算、`--max-workers 0`、磁盘临时目录；“标准”模式才使用官方默认设备与最多四个编码工作线程。二者都不改变用户比例和官方编码精度。
+
+任务可取消，再点“继续切片”会校验并复用已完成的中间层；未完成阶段重做。构建时本页面暂时释放三维场景，结束后恢复镜头。其他浏览器标签页和程序需自行关闭。低资源以更长计算时间和磁盘空间换取较低内存占用。
 
 切片成功后视觉版本锁定，不提供重新切片。系统不会在失败后自动改变层数或参数。
 
@@ -106,11 +109,13 @@ LOD0 直接使用完整源 PLY，不执行抽稀。其余层串行调用官方 `
 3. 点击“计算体素”，等待卡片显示“体素已就绪”；
 4. 已完成的数据可以点击“重新计算体素”。新版本校验通过前，上一版始终保留。
 
-体素化读取不可变的完整源 PLY，而不是抽稀 LOD。它调用 `splat-transform 3.3.0` 官方 WebGPU 并行体素化，生成 `scene.voxel.json` 与 `scene.voxel.bin` 稀疏体素八叉树，同时用官方 `--collision-mesh faces` 生成同版本的 `scene.collision.glb` 调试面网格。系统不执行 floor/external fill、carve 或自动调参；航线避障所需的计算真值始终是 SVO，GLB 只负责让人检查体素覆盖是否合理。
+体素化读取不可变的完整源 PLY，而不是抽稀 LOD。本项目先建立磁盘空间索引，再按完整高斯影响范围分区，逐区调用未修改的 `splat-transform 3.4.2` 官方 WebGPU 体素化。分区内统一累积透明度；不是按中心硬切，也不是将独立计算的二值结果相加。所有分区通过校验后才激活，失败继续服务旧版。分区调度由本项目新增，并非官方现成的分区命令。
+
+SVO 与调试 GLB 分开生成，网格失败不会导致已完成的碰撞数据失败。系统不执行 floor/exterior fill、carve 或自动调粗体素；SVO 仍是唯一碰撞真值。低资源体素仍需要可用的 WebGPU，不能宣称 CPU 体素化。原理、接口和限制见 [低资源构建说明](docs/LOW_RESOURCE_BUILD.md)。
 
 `splat-transform` 将 PLY 标记为绕 Z 轴旋转 180° 的 PLY 坐标约定，而 `.voxel.json`/碰撞 GLB 会烘焙到工具的 identity 坐标。数据库与界面继续保存源 PLY 局部坐标；SVO 查询入口和调试 GLB 节点统一执行 `voxel=(-source.x,-source.y,source.z)`，路线算法内部始终只接触源 PLY 坐标。这个适配是刚性旋转，不改变距离、法向长度或膨胀半径。
 
-如果分辨率导致资源不足，任务会失败并给出错误，系统不会自行改粗体素。用户调整卡片参数后重新计算。
+资源失败只允许缩小任务分区，设备资源重试最多两次；最小分区仍失败则停止，保留旧版与检查点。相同参数点“继续体素任务”续算，修改参数会建立新任务。卡片提供完整日志，区分内存、显存、设备丢失、网格保护和磁盘不足。
 
 ### 调试显示体素
 
@@ -118,7 +123,7 @@ LOD0 直接使用完整源 PLY，不执行抽稀。其余层串行调用官方 `
 - 勾选“显示体素”后，系统才会按需下载并显示半透明青色面网格；取消勾选会移除 Entity、卸载 Asset 并释放对应 GPU 资源；
 - 调试网格与 GS 共用当前 PlayCanvas Application、Canvas、GraphicsDevice 和场景坐标，不创建第二个 Renderer；它不可拾取，也不改变巡检点选择与碰撞查询；
 - 大场景调试网格可能达到数百 MiB，默认不加载。卡片会显示真实文件大小，达到 256 MiB 时加载前会再次确认；
-- 旧体素版本若没有 `scene.collision.glb`，点击“显示体素”会明确询问是否使用卡片中的当前参数重算；系统不会静默重算或修改体素参数。
+- 没有网格时，“显示体素”只生成所选分区的调试附件，沿用活动碰撞版本的参数；也可选择分区编号后点击“生成该区调试网格”。每次只显示一个分区（含缓冲范围），不是整场网格。旧单体版本按整体生成；如触发保护，可继续使用原 SVO，不修改它。
 
 ### 场景卡片管理
 
@@ -186,12 +191,14 @@ var/
     │   ├── lod-meta.json
     │   └── <chunk>/...
     ├── collision-revisions/<revision>/
-    │   ├── scene.voxel.json
-    │   ├── scene.voxel.bin
-    │   ├── scene.collision.glb
+    │   ├── parts/<partition-id>/scene.voxel.json 和 .bin
+    │   ├── debug/<attachment-id>/scene.collision.glb  # 按需
     │   └── collision-manifest.json
+    ├── collision-index/spatial.sqlite             # 磁盘贡献范围索引
+    ├── logs/                                     # 完整构建日志
     ├── work/<revision>/
-    └── collision-work/<revision>/
+    ├── collision-work/<revision>/
+    └── debug-work/<attachment-id>/
 ```
 
 - `dataset.json`：视觉与体素的独立状态、参数、摘要和活动版本；
@@ -200,7 +207,9 @@ var/
 - `source.ply`：不可变的完整细节真值；
 - `visual-revisions`：构建校验通过后原子发布的 SOG；
 - `collision-revisions`：校验通过后原子发布的官方 SVO；
-- `work`、`collision-work`：中间文件。成功后自动清理；失败时保留用于诊断。
+- `work`、`collision-work`：中间文件与校验检查点。成功后清理；失败/取消时保留用于续算。
+- `collision-index`：复用的源空间索引；随场景永久删除。旧单体 SVO 目录继续只读兼容。
+- 调试附件不使标签和路线失效；激活新的碰撞版本才使旧航线待重新规划。碰撞查询使用 256MiB 分页缓存，规划在单独工作线程运行。
 
 版本化 Chunk 与体素文件使用长缓存。体素重算失败不会覆盖已经激活的体素版本。
 
@@ -211,13 +220,15 @@ npm test
 npm run build
 ```
 
+常规测试不重新切片。需要全量验收时运行 `node scripts/verify-low-resource.mjs /绝对路径/point_cloud.ply`；原生接缝对照运行 `node scripts/verify-partition-native.mjs`。结果在 `var/acceptance/`，不入库。分支规则：`main` 保留优化前稳定版，`test` 承载本次优化，不自动合并。
+
 生成可直接复制到 macOS、Linux 或 Windows 服务器的 Web 部署目录：
 
 ```bash
 npm run deploy:web
 ```
 
-产物输出到 `release/web/`，包含压缩后的前端、单文件后端、必要的官方转换运行时和跨平台启动脚本；不包含业务 `var/`、PLY、SQLite、TS/TSX 或 Source Map。详见 [`docs/WEB_DEPLOYMENT.md`](docs/WEB_DEPLOYMENT.md)。
+产物输出到 `release/web/`，包含压缩后的前端、后端和规划工作线程、必要的官方转换运行时和跨平台启动脚本；不包含业务 `var/`、PLY、SQLite、TS/TSX 或 Source Map。详见 [`docs/WEB_DEPLOYMENT.md`](docs/WEB_DEPLOYMENT.md)。
 
 生成可交付客户的 Web 安装包：
 

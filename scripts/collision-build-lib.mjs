@@ -99,8 +99,8 @@ export const validateCollisionArtifact = async (
       throw new Error(`体素统计 ${key} 无效。`);
     }
   }
-  if (metadata.nodeCount === 0 || metadata.leafDataCount === 0) {
-    throw new Error('体素产物为空。');
+  if (metadata.nodeCount === 0 && (metadata.leafDataCount !== 0 || metadata.numInteriorNodes !== 0 || metadata.numMixedLeaves !== 0)) {
+    throw new Error('空体素树包含矛盾的节点统计。');
   }
   assertBounds(metadata.gridBounds, 'gridBounds');
   assertBounds(metadata.sceneBounds, 'sceneBounds');
@@ -140,14 +140,15 @@ export const validateCollisionArtifact = async (
   };
 };
 
-export const createCollisionArguments = (source, output, options = {}) => {
+export const createCollisionArguments = (source, output, options = {}, { debugMesh = false } = {}) => {
   const validated = validateCollisionOptions(options);
   return [
     '--memory',
+    '--overwrite',
     source,
     '--voxel-size', String(validated.voxelSize),
     '--voxel-opacity', String(validated.voxelOpacity),
-    '--collision-mesh', 'faces',
+    ...(debugMesh ? ['--collision-mesh', 'faces'] : []),
     output
   ];
 };
@@ -168,6 +169,9 @@ export const buildOfficialCollision = async ({
   outputDirectory,
   voxelSize = DEFAULT_VOXEL_SIZE,
   voxelOpacity = DEFAULT_VOXEL_OPACITY,
+  debugMesh = false,
+  signal,
+  logPath,
   onProgress,
   onLog,
   onChild
@@ -178,9 +182,11 @@ export const buildOfficialCollision = async ({
 
   onProgress?.({ progress: 3, stage: '正在启动官方图形处理器体素化' });
   await runSplatTransform(
-    createCollisionArguments(source, output, options),
+    createCollisionArguments(source, output, options, { debugMesh }),
     {
       onChild,
+      signal,
+      logPath,
       onLog: (line) => {
         onLog?.(line);
         const update = progressForLine(line);
@@ -191,16 +197,16 @@ export const buildOfficialCollision = async ({
 
   onProgress?.({ progress: 96, stage: '正在校验体素碰撞产物' });
   const report = await validateCollisionArtifact(outputDirectory, options, {
-    requireCollisionMesh: true
+    requireCollisionMesh: debugMesh
   });
   const manifest = {
     schemaVersion: 1,
     strategy: 'official-sparse-voxel-octree-v1',
     coordinateSystem: 'source-ply-local-z-up-meters',
     sourceToVoxelTransform: 'rotate-z-180',
-    collisionMeshGenerated: true,
+    collisionMeshGenerated: debugMesh,
     collisionMeshMode: 'faces',
-    collisionMeshFile: report.collisionMesh.file,
+    collisionMeshFile: report.collisionMesh?.file ?? null,
     collisionMeshDebugOnly: true,
     execution: {
       voxelization: 'WebGPU parallel',

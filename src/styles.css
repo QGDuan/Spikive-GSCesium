@@ -5,6 +5,9 @@ html, body, #ui-root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 body { background: var(--ui-color-canvas); color: var(--ui-color-text); font-family: var(--ui-font-sans); font-synthesis: none; }
 #ui-root { pointer-events: none; }
 button, input, select, textarea { font: inherit; }
+a { color: var(--ui-color-accent-soft); text-underline-offset: 3px; }
+a:hover { color: var(--ui-color-accent-hover); }
+a:focus-visible { outline: 2px solid var(--ui-color-accent); outline-offset: 2px; }
 button { color: inherit; }
 
 #application-canvas { position: fixed; inset: 0; display: block; width: 100%; height: 100%; outline: none; }

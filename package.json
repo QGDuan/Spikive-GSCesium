@@ -15,7 +15,7 @@
     "package:web": "npm run deploy:web && node scripts/package-web-release.mjs"
   },
   "dependencies": {
-    "@playcanvas/splat-transform": "3.3.0",
+    "@playcanvas/splat-transform": "3.4.2",
     "playcanvas": "2.21.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

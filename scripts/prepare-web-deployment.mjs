@@ -174,6 +174,13 @@ await build({
   legalComments: 'none'
 });
 
+await build({
+  entryPoints: [resolve(root, 'server/route-worker.mjs')],
+  outfile: resolve(deploymentRoot, 'route-worker.mjs'),
+  bundle: true, platform: 'node', format: 'esm', target: 'node22',
+  minify: true, sourcemap: false, legalComments: 'none'
+});
+
 await Promise.all([
   cp(resolve(root, 'dist'), resolve(deploymentRoot, 'dist'), { recursive: true }),
   cp(resolve(root, 'docs/WEB_DEPLOYMENT.md'), resolve(deploymentRoot, 'README.md')),

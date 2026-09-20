@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import {
   access,
+  appendFile,
   mkdir,
   readFile,
   readdir,
@@ -24,18 +25,16 @@ import {
   validateSogArtifact
 } from './scripts/sog-build-lib.mjs';
 import {
-  buildOfficialCollision,
   DEFAULT_VOXEL_OPACITY,
   DEFAULT_VOXEL_SIZE,
   validateCollisionOptions
 } from './scripts/collision-build-lib.mjs';
 import { LabelStore, LABEL_TYPES } from './server/label-store.mjs';
 import { MissionStore } from './server/mission-store.mjs';
-import { planMission } from './server/route-planner.mjs';
-import {
-  PLY_SOURCE_TO_VOXEL_IDENTITY,
-  VoxelWorldRepository
-} from './server/voxel-world.mjs';
+import { planInWorker, isPlanning } from './server/route-job.mjs';
+import { buildPartitionedCollision, buildCollisionDebugMesh } from './scripts/partitioned-collision.mjs';
+import { resourceProfile, checkCancelled, hashFile, TOOL_VERSION } from './scripts/build-support.mjs';
+import { sourceInfo } from './scripts/native-file-system.mjs';
 
 const production = process.argv.includes('--production');
 const port = Number(process.env.SPIKIVE_PORT || 5173);
@@ -54,14 +53,14 @@ const SURFACE_SELECTION_DATA_SOURCE = 'rendered-alpha-front-surface';
 let activeBuildId;
 let activeCollisionId;
 let activeChild;
+let activeAbort;
+let activeDebugId;
 const buildRuntime = new Map();
 const collisionRuntime = new Map();
 let vite;
 let labelStore;
 let missionStore;
-const voxelRepository = new VoxelWorldRepository(2 * 1024 ** 3, {
-  coordinateTransform: PLY_SOURCE_TO_VOXEL_IDENTITY
-});
+const heavyBusy = () => activeBuildId || activeCollisionId || activeDebugId || isPlanning();
 
 const datasetDirectory = (id) => {
   if (!UUID_PATTERN.test(id)) {
@@ -355,10 +354,28 @@ const appendBuildLog = (id, line) => {
 const createRevision = () =>
   `${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`;
 
-const runBuild = async (id) => {
+const persistTaskStart = async (dataset) => {
+  try { await writeDataset(dataset); }
+  catch (error) {
+    activeAbort?.abort(); activeAbort = undefined;
+    activeBuildId = undefined; activeCollisionId = undefined; activeDebugId = undefined;
+    buildRuntime.delete(dataset.id); collisionRuntime.delete(dataset.id);
+    throw error;
+  }
+};
+
+const recoverUnactivatedOutput = async (directory, staged, final, kind, revision) => {
+  const current = JSON.parse(await readFile(resolve(directory, 'dataset.json'), 'utf8'));
+  if (current[kind] === revision) throw new Error('构建版本已激活，拒绝覆盖。');
+  try { await access(staged); return; } catch (error) { if (!isMissing(error)) throw error; }
+  try { await access(final); } catch (error) { if (isMissing(error)) return; throw error; }
+  await mkdir(resolve(staged, '..'), { recursive: true });
+  await rename(final, staged);
+};
+
+const runBuild = async (id, revision) => {
   const directory = datasetDirectory(id);
   const source = resolve(directory, 'source.ply');
-  const revision = createRevision();
   const workDirectory = resolve(directory, 'work', revision);
   const stagedOutputDirectory = resolve(workDirectory, 'sog');
   const finalDirectory = resolve(directory, 'visual-revisions', revision);
@@ -367,12 +384,17 @@ const runBuild = async (id) => {
   try {
     const dataset = await readDataset(id);
     const runtime = buildRuntime.get(id);
+    await recoverUnactivatedOutput(directory, stagedOutputDirectory, finalDirectory, 'activeVisualRevision', revision);
     await mkdir(stagedOutputDirectory, { recursive: true });
     const buildResult = await buildOfficialSog({
       source,
       output: resolve(stagedOutputDirectory, 'lod-meta.json'),
       workDirectory: resolve(workDirectory, 'levels'),
       levelCount: dataset.lodLevels,
+      resourceProfile: dataset.resourceProfile,
+      sourceSha256: dataset.source.sha256,
+      signal: activeAbort.signal,
+      logPath: resolve(directory, 'logs', `visual-${revision}.log`),
       onProgress: ({ progress, stage }) => {
         if (runtime) {
           runtime.progress = progress;
@@ -390,9 +412,10 @@ const runBuild = async (id) => {
       runtime.stage = '正在校验并发布切片';
     }
     const report = await validateSogArtifact(stagedOutputDirectory, dataset.lodLevels);
-    if (report.counts[0] <= 0) {
-      throw new Error('第零层未保留有效高斯点。');
+    if (report.counts[0] !== (await sourceInfo(source)).numGaussians) {
+      throw new Error('第零层数量与不可变源文件不一致，拒绝发布。');
     }
+    checkCancelled(activeAbort.signal);
     await mkdir(resolve(directory, 'visual-revisions'), { recursive: true });
     await rename(stagedOutputDirectory, finalDirectory);
     published = true;
@@ -403,6 +426,7 @@ const runBuild = async (id) => {
     current.stage = '可视化就绪';
     current.error = null;
     current.activeVisualRevision = revision;
+    current.pendingVisualRevision = null;
     current.visual = {
       revision,
       renderUrl: `/api/datasets/${id}/visual-revisions/${revision}/lod-meta.json`,
@@ -412,11 +436,15 @@ const runBuild = async (id) => {
       files: report.files,
       bytes: report.bytes,
       generator: report.meta.asset?.generator ?? '@playcanvas/splat-transform',
-      workerCount: buildResult.workerCount
+      workerCount: buildResult.workerCount,
+      toolVersion: TOOL_VERSION,
+      resourceProfile: buildResult.resourceProfile,
+      sourceSha256: buildResult.sourceSha256
     };
-    missionStore.invalidateDatasetVisual(id);
+    checkCancelled(activeAbort.signal);
     await writeDataset(current);
-    await rm(workDirectory, { recursive: true, force: true });
+    missionStore.invalidateDatasetVisual(id);
+    await rm(workDirectory, { recursive: true, force: true }).catch((error) => console.warn('切片已发布，临时文件清理失败：', error));
   } catch (error) {
     const current = await readDataset(id);
     const hasActiveVisual = Boolean(current.activeVisualRevision && current.visual);
@@ -424,6 +452,8 @@ const runBuild = async (id) => {
     current.progress = buildRuntime.get(id)?.progress ?? current.progress ?? 0;
     current.stage = hasActiveVisual ? '切片任务失败，保留当前切片' : '切片失败';
     current.error = error instanceof Error ? error.message : String(error);
+    current.errorCode = error.code ?? 'BUILD';
+    await appendFile(resolve(directory, 'logs', `visual-${revision}.log`), `\n${error.stack}\n${error.cause?.stack ?? ''}\n`).catch(() => {});
     current.buildLogTail = buildRuntime.get(id)?.logTail ?? [];
     await writeDataset(current);
     console.error(`数据集 ${id} 构建失败：`, error);
@@ -433,6 +463,7 @@ const runBuild = async (id) => {
   } finally {
     activeChild = undefined;
     activeBuildId = undefined;
+    activeAbort = undefined;
     buildRuntime.delete(id);
   }
 };
@@ -448,9 +479,8 @@ const appendCollisionLog = (id, line) => {
   }
 };
 
-const runCollisionBuild = async (id, options) => {
+const runCollisionBuild = async (id, options, revision) => {
   const directory = datasetDirectory(id);
-  const revision = createRevision();
   const workDirectory = resolve(directory, 'collision-work', revision);
   const stagedOutputDirectory = resolve(workDirectory, 'collision');
   const finalDirectory = resolve(directory, 'collision-revisions', revision);
@@ -459,9 +489,15 @@ const runCollisionBuild = async (id, options) => {
   try {
     const dataset = await readDataset(id);
     const runtime = collisionRuntime.get(id);
-    const report = await buildOfficialCollision({
+    await recoverUnactivatedOutput(directory, stagedOutputDirectory, finalDirectory, 'activeCollisionRevision', revision);
+    const report = await buildPartitionedCollision({
       source: resolve(directory, 'source.ply'),
       outputDirectory: stagedOutputDirectory,
+      workDirectory,
+      indexDirectory: resolve(directory, 'collision-index'),
+      sourceSha256: dataset.source.sha256,
+      signal: activeAbort.signal,
+      logPath: resolve(directory, 'logs', `collision-${revision}.log`),
       ...options,
       onProgress: ({ progress, stage }) => {
         if (runtime) {
@@ -479,12 +515,14 @@ const runCollisionBuild = async (id, options) => {
       runtime.progress = 98;
       runtime.stage = '正在原子发布体素版本';
     }
+    checkCancelled(activeAbort.signal);
     await mkdir(resolve(directory, 'collision-revisions'), { recursive: true });
     await rename(stagedOutputDirectory, finalDirectory);
     published = true;
 
     const current = await readDataset(id);
     current.activeCollisionRevision = revision;
+    current.pendingCollisionRevision = null;
     current.collision = {
       status: 'ready',
       progress: 100,
@@ -497,25 +535,22 @@ const runCollisionBuild = async (id, options) => {
       sourceVisualRevision: dataset.activeVisualRevision,
       coordinateSystem: 'source-ply-local-z-up-meters',
       sourceToVoxelTransform: 'rotate-z-180',
-      generator: report.metadata.asset?.generator ?? '@playcanvas/splat-transform',
-      execution: 'WebGPU parallel',
+      generator: `@playcanvas/splat-transform@${TOOL_VERSION}`,
+      execution: 'partitioned-webgpu-serial',
+      resourceProfile: dataset.resourceProfile ?? 'low-memory',
       bytes: report.bytes,
       files: report.files,
-      nodeCount: report.metadata.nodeCount,
-      leafDataCount: report.metadata.leafDataCount,
-      treeDepth: report.metadata.treeDepth,
-      gridBounds: report.metadata.gridBounds,
-      checksums: report.checksums,
-      debugMeshUrl:
-        `/api/datasets/${id}/collision-revisions/${revision}/${report.collisionMesh.file}`,
-      debugMeshBytes: report.collisionMesh.bytes,
+      partitionCount: report.manifest.partitions.filter((part) => !part.empty && !part.occupancyEmpty).length,
+      manifestSha256: await hashFile(resolve(finalDirectory, 'collision-manifest.json')),
+      gridBounds: report.manifest.gridBounds,
+      debugMeshStatus: 'not-built',
       debugMeshMode: 'faces',
       createdAt: new Date().toISOString()
     };
-    missionStore.invalidateDatasetCollision(id, revision);
+    checkCancelled(activeAbort.signal);
     await writeDataset(current);
-    voxelRepository.invalidateDataset(id);
-    await rm(workDirectory, { recursive: true, force: true });
+    missionStore.invalidateDatasetCollision(id, revision);
+    await rm(workDirectory, { recursive: true, force: true }).catch((error) => console.warn('体素已发布，临时文件清理失败：', error));
   } catch (error) {
     const current = await readDataset(id);
     const previous = current.activeCollisionRevision && current.collision?.revision
@@ -527,10 +562,12 @@ const runCollisionBuild = async (id, options) => {
       progress: collisionRuntime.get(id)?.progress ?? 0,
       stage: previous.revision ? '重新计算失败，保留上一版体素' : '体素计算失败',
       error: error instanceof Error ? error.message : String(error),
+      errorCode: error.code ?? 'BUILD',
       failedLogTail: collisionRuntime.get(id)?.logTail ?? [],
       requestedOptions: options
     };
     await writeDataset(current);
+    await appendFile(resolve(directory, 'logs', `collision-${revision}.log`), `\n${error.stack}\n${error.cause?.stack ?? ''}\n`).catch(() => {});
     console.error(`数据集 ${id} 体素构建失败：`, error);
     if (published) {
       console.error(`注意：新体素已发布但未激活，目录为 ${finalDirectory}`);
@@ -538,8 +575,44 @@ const runCollisionBuild = async (id, options) => {
   } finally {
     activeChild = undefined;
     activeCollisionId = undefined;
+    activeAbort = undefined;
     collisionRuntime.delete(id);
   }
+};
+
+const runDebugBuild = async (dataset, partitionIndex) => {
+  const id = dataset.id;
+  const revision = dataset.activeCollisionRevision;
+  const directory = datasetDirectory(id);
+  const debugRevision = createRevision();
+  const workDirectory = resolve(directory, 'debug-work', debugRevision);
+  const logPath = resolve(directory, 'logs', 'debug.log');
+  try {
+    const report = await buildCollisionDebugMesh({ source: resolve(directory, 'source.ply'),
+      collisionDirectory: resolve(directory, 'collision-revisions', revision),
+      indexDirectory: resolve(directory, 'collision-index'), workDirectory, partitionIndex,
+      signal: activeAbort.signal, logPath, onChild: (child) => { activeChild = child; } });
+    const attachment = resolve(directory, 'collision-revisions', revision, 'debug', debugRevision);
+    await mkdir(attachment, { recursive: true });
+    checkCancelled(activeAbort.signal);
+    await rename(report.meshPath, resolve(attachment, 'scene.collision.glb'));
+    const current = await readDataset(id);
+    if (current.activeCollisionRevision !== revision) throw new Error('碰撞版本已变化，未挂载调试附件。');
+    current.collision.debugMeshStatus = 'ready';
+    current.collision.debugMeshError = null;
+    current.collision.debugMeshPartitionIndex = partitionIndex;
+    current.collision.debugMeshBytes = report.bytes;
+    current.collision.debugMeshUrl = `/api/datasets/${id}/collision-revisions/${revision}/debug/${debugRevision}/scene.collision.glb`;
+    checkCancelled(activeAbort.signal);
+    await writeDataset(current);
+    await rm(workDirectory, { recursive: true, force: true }).catch((error) => console.warn('调试附件已挂载，临时文件清理失败：', error));
+  } catch (error) {
+    const current = await readDataset(id);
+    current.collision.debugMeshStatus = 'failed';
+    current.collision.debugMeshError = error.message;
+    await writeDataset(current);
+    await appendFile(logPath, `\n${error.stack}\n${error.cause?.stack ?? ''}\n`).catch(() => {});
+  } finally { activeDebugId = undefined; activeChild = undefined; activeAbort = undefined; }
 };
 
 const streamUpload = async (request, dataset) => {
@@ -704,7 +777,7 @@ const handleApi = async (request, response, url) => {
         ? { type: 'visual', datasetId: activeBuildId }
         : activeCollisionId
           ? { type: 'collision', datasetId: activeCollisionId }
-          : null,
+          : activeDebugId ? { type: 'debug', datasetId: activeDebugId } : null,
       sogWorkerCount: getSogWorkerCount()
     });
     return true;
@@ -727,6 +800,7 @@ const handleApi = async (request, response, url) => {
       throw Object.assign(new Error('高斯点云文件大小无效。'), { statusCode: 400 });
     }
     const ratios = createLodRatios(lodLevels);
+    const profile = resourceProfile(body.resourceProfile);
     const now = new Date().toISOString();
     const dataset = {
       id: randomUUID(),
@@ -734,6 +808,7 @@ const handleApi = async (request, response, url) => {
       expectedBytes,
       lodLevels,
       ratios,
+      resourceProfile: profile,
       status: 'awaiting-upload',
       progress: 0,
       stage: '等待上传高斯点云文件',
@@ -772,11 +847,16 @@ const handleApi = async (request, response, url) => {
     const body = await readJsonBody(request);
     const lodLevels = body.lodLevels === undefined ? dataset.lodLevels : Number(body.lodLevels);
     const ratios = createLodRatios(lodLevels);
+    const profile = resourceProfile(body.resourceProfile ?? dataset.resourceProfile);
     await access(resolve(datasetDirectory(dataset.id), 'source.ply'));
-    if (activeBuildId || activeCollisionId) {
+    if (heavyBusy()) {
       throw Object.assign(new Error('已有切片或体素重任务正在执行，请等待其完成。'), { statusCode: 409 });
     }
     activeBuildId = dataset.id;
+    activeAbort = new AbortController();
+    dataset.resourceProfile = profile;
+    dataset.pendingVisualRevision ||= createRevision();
+    dataset.visualLogUrl = `/api/datasets/${dataset.id}/logs/visual-${dataset.pendingVisualRevision}.log`;
     buildRuntime.set(dataset.id, { progress: 0, stage: '准备切片', logTail: [] });
     dataset.lodLevels = lodLevels;
     dataset.ratios = ratios;
@@ -784,8 +864,8 @@ const handleApi = async (request, response, url) => {
     dataset.progress = 0;
     dataset.stage = '准备切片';
     dataset.error = null;
-    await writeDataset(dataset);
-    void runBuild(dataset.id);
+    await persistTaskStart(dataset);
+    void runBuild(dataset.id, dataset.pendingVisualRevision).catch(console.error);
     sendJson(response, 202, exposeDataset(dataset));
     return true;
   }
@@ -796,12 +876,21 @@ const handleApi = async (request, response, url) => {
     if (!dataset.visual || !dataset.activeVisualRevision || dataset.status === 'building') {
       throw Object.assign(new Error('必须先完成切片，才能计算体素碰撞数据。'), { statusCode: 409 });
     }
-    if (activeBuildId || activeCollisionId) {
+    if (heavyBusy()) {
       throw Object.assign(new Error('已有切片或体素重任务正在执行，请等待其完成。'), { statusCode: 409 });
     }
-    const options = validateCollisionOptions(await readJsonBody(request));
+    const body = await readJsonBody(request);
+    const options = validateCollisionOptions(body);
+    const profile = resourceProfile(body.resourceProfile ?? dataset.resourceProfile);
     await access(resolve(datasetDirectory(dataset.id), 'source.ply'));
+    if (heavyBusy()) throw Object.assign(new Error('已有重任务正在执行。'), { statusCode: 409 });
     activeCollisionId = dataset.id;
+    activeAbort = new AbortController();
+    dataset.resourceProfile = profile;
+    // Only the identical explicit parameters can resume a collision checkpoint.
+    if (JSON.stringify(dataset.collision?.requestedOptions) !== JSON.stringify(options)) dataset.pendingCollisionRevision = null;
+    dataset.pendingCollisionRevision ||= createRevision();
+    dataset.collisionLogUrl = `/api/datasets/${dataset.id}/logs/collision-${dataset.pendingCollisionRevision}.log`;
     collisionRuntime.set(dataset.id, {
       status: 'building',
       progress: 0,
@@ -817,9 +906,51 @@ const handleApi = async (request, response, url) => {
       error: null,
       requestedOptions: options
     };
-    await writeDataset(dataset);
-    void runCollisionBuild(dataset.id, options);
+    await persistTaskStart(dataset);
+    void runCollisionBuild(dataset.id, options, dataset.pendingCollisionRevision).catch(console.error);
     sendJson(response, 202, exposeDataset(dataset));
+    return true;
+  }
+
+  const cancelMatch = /^\/api\/datasets\/([^/]+)\/tasks\/cancel$/.exec(url.pathname);
+  if (request.method === 'POST' && cancelMatch) {
+    const dataset = await readDataset(cancelMatch[1]);
+    if (![activeBuildId, activeCollisionId, activeDebugId].includes(dataset.id)) {
+      throw Object.assign(new Error('该场景没有正在执行的构建任务。'), { statusCode: 409 });
+    }
+    activeAbort?.abort();
+    sendJson(response, 202, { cancelling: true });
+    return true;
+  }
+  const debugMatch = /^\/api\/datasets\/([^/]+)\/collision\/debug-mesh\/build$/.exec(url.pathname);
+  if (request.method === 'POST' && debugMatch) {
+    const dataset = await readDataset(debugMatch[1]);
+    if (!dataset.activeCollisionRevision || !dataset.collision?.revision) throw Object.assign(new Error('请先完成体素计算。'), { statusCode: 409 });
+    if (heavyBusy()) throw Object.assign(new Error('已有重任务正在执行。'), { statusCode: 409 });
+    const body = await readJsonBody(request);
+    const partitionIndex = body.partitionIndex ?? 0;
+    if (!Number.isInteger(partitionIndex) || partitionIndex < 0 || partitionIndex >= (dataset.collision.partitionCount ?? 1)) {
+      throw Object.assign(new Error('调试分区编号无效。'), { statusCode: 400 });
+    }
+    if (heavyBusy()) throw Object.assign(new Error('已有重任务正在执行。'), { statusCode: 409 });
+    activeDebugId = dataset.id;
+    activeAbort = new AbortController();
+    dataset.collision.debugMeshStatus = 'building';
+    dataset.collision.debugMeshError = null;
+    await persistTaskStart(dataset);
+    void runDebugBuild(dataset, partitionIndex).catch(console.error);
+    sendJson(response, 202, exposeDataset(dataset));
+    return true;
+  }
+  const logMatch = /^\/api\/datasets\/([^/]+)\/logs\/((?:visual-|collision-)[0-9A-Za-z_-]+\.log|debug\.log)$/.exec(url.pathname);
+  if (request.method === 'GET' && logMatch) {
+    await readDataset(logMatch[1]);
+    try {
+      if (!await serveFile(request, response, resolve(datasetDirectory(logMatch[1]), 'logs', logMatch[2]), 'no-store')) sendJson(response, 404, { error: '日志尚未生成。' });
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+      sendJson(response, 404, { error: '日志尚未生成。' });
+    }
     return true;
   }
 
@@ -841,6 +972,7 @@ const handleApi = async (request, response, url) => {
 
   const missionPlanMatch = /^\/api\/missions\/([^/]+)\/plan$/.exec(url.pathname);
   if (request.method === 'POST' && missionPlanMatch) {
+    if (heavyBusy()) throw Object.assign(new Error('已有构建或航线任务正在执行，请完成后再规划。'), { statusCode: 409 });
     const mission = getMissionOrThrow(missionPlanMatch[1]);
     const dataset = await readDataset(mission.datasetId);
     if (!dataset.activeCollisionRevision || dataset.collision?.status !== 'ready' ||
@@ -851,22 +983,19 @@ const handleApi = async (request, response, url) => {
       throw Object.assign(new Error('体素数据与当前源高斯点云不一致，请重新计算体素。'), { statusCode: 409 });
     }
     const input = validateMissionInput(dataset, mission);
-    const jsonPath = resolve(
-      datasetDirectory(dataset.id), 'collision-revisions', dataset.activeCollisionRevision, 'scene.voxel.json'
-    );
-    const collision = await voxelRepository.get(`${dataset.id}:${dataset.activeCollisionRevision}`, jsonPath);
+    const directory = resolve(datasetDirectory(dataset.id), 'collision-revisions', dataset.activeCollisionRevision);
+    if (heavyBusy()) throw Object.assign(new Error('已有构建或航线任务正在执行，请完成后再规划。'), { statusCode: 409 });
+    const result = await planInWorker(directory, { startLabel: input.startLabel, labels: input.labels, profile: input.profile }, dataset.collision.manifestSha256);
     const currentDataset = await readDataset(dataset.id);
     const currentMission = missionStore.get(mission.id);
     if (!currentMission || currentMission.updatedAt !== mission.updatedAt ||
         currentDataset.activeCollisionRevision !== dataset.activeCollisionRevision) {
       throw Object.assign(new Error('航线或体素版本在计算准备期间已变化，请重新规划。'), { statusCode: 409 });
     }
-    const result = planMission({
-      startLabel: input.startLabel,
-      labels: input.labels,
-      profile: input.profile,
-      collision
-    });
+    const currentInput = validateMissionInput(currentDataset, currentMission);
+    if (JSON.stringify(currentInput) !== JSON.stringify(input)) {
+      throw Object.assign(new Error('航线参数或标签在计算期间已变化，请重新规划。'), { statusCode: 409 });
+    }
     const saved = missionStore.savePlan(mission.id, {
       ...result,
       collisionRevision: dataset.activeCollisionRevision
@@ -1056,12 +1185,11 @@ const handleApi = async (request, response, url) => {
   if (request.method === 'DELETE' && datasetMatch) {
     const id = datasetMatch[1];
     await readDataset(id);
-    if (activeBuildId === id || activeCollisionId === id) {
+    if (activeBuildId === id || activeCollisionId === id || activeDebugId === id || isPlanning()) {
       throw Object.assign(new Error('该数据正在执行重任务，完成后才能删除。'), { statusCode: 409 });
     }
     missionStore.deleteDataset(id);
     labelStore.deleteDataset(id);
-    voxelRepository.invalidateDataset(id);
     await rm(datasetDirectory(id), { recursive: true, force: true });
     sendJson(response, 200, { deleted: true, id });
     return true;
@@ -1147,6 +1275,11 @@ const recoverInterruptedBuilds = async () => {
         stage: hasActiveCollision ? '上次重新计算被中断，保留当前体素' : '上次体素计算被服务中断',
         error: '本地服务在体素完成前退出，请重新点击计算体素。'
       };
+      changed = true;
+    }
+    if (stored.collision?.debugMeshStatus === 'building') {
+      stored.collision.debugMeshStatus = 'failed';
+      stored.collision.debugMeshError = '上次调试网格生成被服务中断；碰撞版本未改变，可重新生成。';
       changed = true;
     }
     if (changed) await writeDataset(stored);
@@ -1255,6 +1388,7 @@ server.listen(port, host, () => {
 });
 
 const shutdown = async () => {
+  activeAbort?.abort();
   activeChild?.kill('SIGTERM');
   server.close();
   await vite?.close();

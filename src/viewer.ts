@@ -263,6 +263,15 @@ export class GsViewer {
     this.cameraNavigation?.setCameraMode(mode);
   }
 
+  captureCamera() { return this.cameraNavigation?.capture(); }
+
+  restoreCamera(snapshot: ReturnType<GsViewer['captureCamera']>) {
+    if (snapshot) {
+      this.activeCameraMode = snapshot.mode;
+      this.cameraNavigation?.restore(snapshot);
+    }
+  }
+
   releaseCameraPointerLock() {
     return this.cameraNavigation?.releasePointerLock() ?? false;
   }

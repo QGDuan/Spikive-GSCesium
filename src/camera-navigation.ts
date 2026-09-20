@@ -81,6 +81,20 @@ export class InspectionCameraNavigation {
     return this.mode;
   }
 
+  capture() {
+    return { mode: this.mode, pose: new Pose().copy(this.pose), thirdPersonPose: new Pose().copy(this.thirdPersonPose) };
+  }
+
+  restore(snapshot: ReturnType<InspectionCameraNavigation['capture']>) {
+    if (this.disposed) return;
+    this.setCameraMode(snapshot.mode);
+    this.pose.copy(snapshot.pose);
+    this.thirdPersonPose.copy(snapshot.thirdPersonPose);
+    if (this.mode === 'third-person') this.orbitController.attach(this.pose, false);
+    this.resetInputState();
+    this.applyPose();
+  }
+
   setCameraMode(mode: CameraMode) {
     if (this.disposed || mode === this.mode) return;
 

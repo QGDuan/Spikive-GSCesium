@@ -2,10 +2,10 @@
 
 ## 1. 目的与边界
 
-系统从不可变的完整 PLY 独立生成两种同版本体素产物：
+系统从不可变的完整 PLY 生成碰撞数据，并按需附加调试网格。test 分支采用分区流水线，详见 [低资源构建](LOW_RESOURCE_BUILD.md)：
 
 - `scene.voxel.json` 和 `scene.voxel.bin`：稀疏体素八叉树（SVO），是碰撞查询、机体膨胀和航线规划的唯一空间真值；
-- `scene.collision.glb`：用于人工检查体素覆盖的面网格，只是显示调试产物。
+- `scene.collision.glb`：独立按需生成的面网格，只是显示调试产物；分区版每次检查一个非空分区（含缓冲）。
 
 GLB 不参与碰撞、法向计算、标签位置或航线有效性判定。隐藏或卸载 GLB 不会改变 SVO 和业务数据。
 
@@ -19,19 +19,20 @@ GLB 不参与碰撞、法向计算、标签位置或航线有效性判定。隐�
 splat-transform --memory source.ply \
   --voxel-size <用户输入> \
   --voxel-opacity <用户输入> \
-  --collision-mesh faces \
   scene.voxel.json
 ```
 
 其中体素边长默认 `0.20 m`，透明度阈值默认 `0.10`。系统不根据内存、FPS 或失败结果自动改粗体素；资源不足时明确失败，等待操作者调整参数后重试。
 
-新版本必须同时通过：
+碰撞版本必须通过所有分区的：
 
 - SVO 格式、树深、边界、节点数与二进制长度校验；
-- GLB 2.0 magic、版本、声明长度和非空校验；
-- JSON、BIN 和 GLB 的 SHA-256 校验值记录。
+- JSON、BIN 的 SHA-256 校验值记录；
+- 全局网格与核心区完整覆盖、无重叠校验。
 
 校验后才将完整目录原子发布为新 collision revision。重算失败时继续使用上一个活动版本。
+
+调试网格另行用同一个贡献集和碰撞参数执行官方 `--collision-mesh faces`；只有新 SVO 二进制与原版一致、GLB 2.0 文件有效时才挂载。网格失败不影响原碰撞版本。官方 mutable-grid 保护不修改，资源失败不会自动改精度。
 
 ## 3. 显示开关
 
@@ -86,13 +87,13 @@ GLB 默认不请求。用户勾选后才从版本化 URL 加载，服务支持 H
 - collision manifest 记录源 PLY 摘要、参数、坐标系、统计、调试网格模式和全部校验值；
 - 新 manifest 明确记录 `sourceToVoxelTransform=rotate-z-180`；旧活动版本由同一固定运行时适配读取，无需重算体素；
 - API 只公布活动 collision revision 的版本化 `debugMeshUrl`、字节数和模式；
-- 体素重算不修改视觉 revision、标签坐标或航线数据；
+- 体素重算不修改视觉 revision 或标签坐标；新碰撞版本激活后，旧航线失效并等待重新规划；
 - 永久删除数据集时，GLB 与同版本 SVO 一起按数据集所有权清理；
-- 旧 collision revision 不含 GLB 时，只能在用户明确确认后使用卡片当前参数重算，不能静默升级。
+- 没有 GLB 时用户点“显示体素”或“生成该区调试网格”，沿用活动碰撞参数生成独立附件，不重建或切换碰撞版本。
 
 ## 7. 验收
 
-- 新 collision revision 必须同时包含有效 SVO 和 GLB，缺任何一项都不得激活；
+- 新 collision revision 的 SVO 必须全部有效且覆盖完整，GLB 不再是激活前提；
 - 应用初始状态为“显示高斯”已勾选、“显示体素”未勾选；
 - 四种显示组合都不改变 local 坐标、标签、SVO 或航线状态；
 - 视觉树范围与体素范围按 `Rz(180°)` 变换后必须一致，固定空间锚点的 SVO 占用与 GLB 覆盖必须和 GS 重合；
